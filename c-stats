@@ -1,0 +1,252 @@
+#!/usr/bin/perl
+# vim: set ft=perl:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2002-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Perl 5
+# Project  : c-lines
+# Package  : N/A
+# Revision : $Id: c-stats,v 1.4 2003/09/08 20:39:39 pronovic Exp $
+# Purpose  : Implementation
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# This file was composed using 8-space tabs and a width of 132 characters.
+
+########
+# Notes
+########
+
+# 
+# This script take a list of (assumed-to-be-) C or C++ language files
+# (headers or source) and returns statistics (overall lines, comment-
+# only lines, non-comment whitespace) about those files.
+#
+# What's it good for?  Well, I embed a lot of comments in my code.  
+# Sometimes its nice to see how many of the total lines I've written
+# are actual code.  I don't want to tell my boss I wrote 12,000 lines
+# of code if it was really only 6000.  (And no, I don't want to debate
+# whether LOC is a good software metric.)
+#
+# The regular expressions for removing C and C++ comments are taken
+# from the Perl FAQ.
+#
+# The implementation is REALLY inefficient with memory.  At any one
+# time, there might be 3x as much memory used as the files themselves
+# take up.  I'm not motivated to make it better.  This works.
+#
+
+
+################
+# Package setup
+################
+
+use FileHandle;
+use Getopt::Long;
+use strict vars;
+
+
+#################
+# Constant setup
+#################
+
+my $set         = 1;
+my $unset       = 0;
+my $blank       = "";
+
+my $fh = new FileHandle;
+my $def_wrap_lines = 0;
+
+
+########################
+# Variable declarations
+########################
+
+my $help         = $unset;
+my $return       = -1;
+my @files;
+
+my $file;
+
+my @LINES;
+
+my $overall      = 0;
+my $loc          = 0;
+my $comments     = 0;
+my $whitespace   = 0;
+
+my $f_overall    = 0;
+my $f_loc        = 0;
+my $f_comments   = 0;
+my $f_whitespace = 0;
+
+
+################################
+# Handle command-line arguments
+################################
+
+$return = GetOptions("help" => \$help);
+
+if($return == 0)
+{
+   usage();
+   exit 1;
+}
+
+if($help == $set)
+{
+   usage();
+   exit 0;
+}
+
+@files = @ARGV;
+
+
+################
+# Process input
+################
+
+if($#files < 0)
+{
+   @LINES = <STDIN>;
+   ($overall, $loc, $comments, $whitespace) = statistics(@LINES);
+}
+else
+{
+   foreach $file (@files)
+   {
+      open $fh, "<$file" or die "Unable to open $file\n";
+      @LINES = <$fh>;
+      close $fh;
+
+      ($f_overall, $f_loc, $f_comments, $f_whitespace) = statistics(@LINES);
+      
+      $overall += $f_overall;
+      $loc += $f_loc;
+      $comments += $f_comments;
+      $whitespace += $f_whitespace;
+   }
+}
+
+##############################
+# Print statistics and return
+##############################
+
+print  "\n";
+printf "Overall analyzed lines......: %d\n", $overall;
+printf "Total lines of code (LOC)...: %d (%2.2f%%)\n", $loc, $loc/$overall * 100.0;
+printf "Comment-only lines..........: %d (%2.2f%%)\n", $comments, $comments/$overall * 100.0;
+printf "Non-comment whitespace......: %d (%2.2f%%)\n", $whitespace, $whitespace/$overall * 100.0;
+
+exit 0;
+
+
+########################
+# statistics subroutine
+########################
+
+sub statistics($)
+{
+   # Variables
+   my $line;
+   my $lines;
+   my @OVERALL;
+   my @NOCOMMENTS;
+   my @NOWHITESPACE;
+   my $overall = 0;
+   my $comments = 0;
+   my $whitespace = 0;
+   my $loc = 0;
+
+   # Count overall lines
+   @OVERALL = @_;
+   $overall = $#OVERALL;
+
+   # Put the entire document into one big string
+   foreach $line (@OVERALL)
+   {
+      $lines .= $line;
+   }
+
+   # Remove C-style comments
+   $lines =~ s#/\*[^*]*\*+([^/*][^*]*\*+)*/|([^/"']*("[^"\\]*(\\[\d\D][^"\\]*)*"[^/"']*|'[^'\\]*(\\[\d\D][^'\\]*)*'[^/"']*|/+[^*/][^/"']*)*)#$2#g;
+
+   # Remove C++-style comments
+   $lines =~ s#/\*[^*]*\*+([^/*][^*]*\*+)*/|("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|\n+|.[^/"'\\]*)#$2#g;   
+
+   # Put the results back into an array
+   foreach $line (split /\n/, $lines)
+   {
+      push @NOCOMMENTS, "$line\n"
+   }
+
+   # Count the number of comment-only lines
+   $comments = $overall - $#NOCOMMENTS;
+
+   # Remove the lines that have no non-whitespace characters
+   foreach $line (@NOCOMMENTS)
+   {
+      if($line =~ /\S/)
+      {
+         push @NOWHITESPACE, $line;
+      }
+   }
+
+   # Count non-comment whitespace lines
+   $whitespace = $overall - $comments - $#NOWHITESPACE;
+
+   # Determine overall lines of code (LOC)
+   $loc = $overall - $comments - $whitespace;
+
+   # Return the results
+   return ( $overall, $loc, $comments, $whitespace );
+   
+}
+
+
+###################
+# Usage subroutine
+###################
+
+sub usage()
+{
+   print "\n";
+   print "\tUsage: c-stats [--help] [file-list]\n";
+   print "\n";
+   print "\t\t--help   \t- Show this message\n";
+   print "\t\tfile-list\t- File or files to look through\n";
+   print "\n";
+   print "\tReport C-related statistics for files in the file list,\n";
+   print "\tincluding number of blank lines, number of comment-only\n";
+   print "\tlines and number of source-code lines.\n";
+   print "\n";
+   print "\tIf no file-list is specified, statistics are reported\n";
+   print "\tbased on the contents of STDIN.\n";
+   print "\n";
+   print "\tThis program is copyright (c) 2002 Kenneth J. Pronovici and\n";
+   print "\tis distributed under the GNU GPL; see http://www.gnu.org/\n";
+   print "\tfor more information.\n";  
+   exit 0;
+}    

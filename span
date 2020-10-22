@@ -1,0 +1,675 @@
+#!/usr/bin/python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2004 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Authors  : Kenneth J. Pronovici <pronovic@ieee.org>
+#            Robert S. Dubinski <rsd@dubinski-family.org>
+# Language : Python (>= 2.1)
+# Project  : Spanning Solution
+# Revision : $Id: span 1119 2007-02-18 04:06:19Z pronovic $
+# Purpose  : Span a large list of files into sets of fixed size
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Notes
+########################################################################
+
+"""
+This program "spans" (or partitions) the files in a directory into a one or
+more sets of files, where the size of each set is as close as possible to a
+given capacity.  When the spanning process is complete, the program writes one
+setNNNNNNN.txt file to disk (in $PWD) for each set it has created.  A clear
+warning is printed if some files could not be placed in a set (for instance, if
+the chosen set capacity is too small to accomodate one or more unusually large
+files).
+
+The spanning algorithm uses one of several "knapsack" algorithms to decide
+which files to place in which set.  Knapsack algorithms are "fit" algorithms,
+used to take a set of 'things' and decide on the optimal way to fit them into
+some container.  
+
+All of the knapsack algorithms implemented below assume that "optimal" means
+"use up as much capacity as possible".  However, each produces a slightly
+different result.  For instance, the best fit and first fit algorithms tend to
+include fewer files than the worst fit and alternate fit algorithms, even if
+they use capacity more efficiently (measured in terms of percent utilization).  
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+@author: Robert S. Dubinski <rsd@dubinski-family.org>
+"""
+
+
+########################################################################
+# Imported modules
+########################################################################
+
+# System modules
+import sys
+import os
+import re
+
+
+#######################################################################
+# Module-wide configuration and constants
+#######################################################################
+ 
+# General conversion constants
+BYTES_PER_KBYTE  = 1024.0
+KBYTES_PER_MBYTE = 1024.0
+BYTES_PER_MBYTE  = BYTES_PER_KBYTE * KBYTES_PER_MBYTE
+BYTES_PER_GBYTE  = BYTES_PER_KBYTE * BYTES_PER_MBYTE
+
+
+#######################################################################
+# Functions
+#######################################################################
+
+#######################
+# first_fit() function
+#######################
+
+def first_fit(items, capacity):
+
+   """
+   Implements the first-fit knapsack algorithm.
+
+   The first-fit algorithm proceeds through an unsorted list of items until
+   running out of items or meeting capacity exactly.  If capacity is exceeded,
+   the item that caused capacity to be exceeded is thrown away and the next one
+   is tried.  This algorithm generally performs more poorly than the other
+   algorithms both in terms of capacity utilization and item utilization, but
+   can be as much as an order of magnitude faster on large lists of items
+   because it doesn't require any sorting.
+
+   The "size" values in the items and capacity arguments must be comparable,
+   but they are unitless from the perspective of this function.
+
+   The function assumes that the list of items may be used destructively, if
+   needed.  This avoids the overhead of having the function make a copy of the
+   list, if this is not required.  Callers should pass items.copy() if they do
+   not want their version of the list modified.
+
+   The function returns a list of chosen items and the unitless amount of
+   capacity used by the items.
+
+   @param items: Items to operate on
+   @type items: dictionary, keyed on item, of (item, size) tuples, item as string and size as integer
+
+   @param capacity: Capacity of container to fit to
+   @type capacity: integer
+
+   @returns: Tuple (items, used) as described above
+   """
+
+   # Use dict since insert into dict is faster than list append
+   included = { }
+
+   # Search the list as it stands (arbitrary order)
+   used = 0
+   remaining = capacity
+   for key in items.keys():
+      if remaining == 0:
+         break
+      if remaining - items[key][1] >= 0:
+         included[key] = None
+         used += items[key][1]
+         remaining -= items[key][1]
+
+   # Return results
+   return (included.keys(), used)
+
+
+######################
+# best_fit() function
+######################
+
+def best_fit(items, capacity):
+
+   """
+   Implements the best-fit knapsack algorithm.
+
+   The best-fit algorithm proceeds through a sorted list of items (sorted from
+   largest to smallest) until running out of items or meeting capacity exactly.
+   If capacity is exceeded, the item that caused capacity to be exceeded is
+   thrown away and the next one is tried.  The algorithm effectively includes
+   the minimum number of items possible in its search for optimal capacity
+   utilization.  For large lists of mixed-size items, it's not ususual to see
+   the algorithm achieve 100% capacity utilization by including fewer than 1%
+   of the items.  Probably because it often has to look at fewer of the items
+   before completing, it tends to be a little faster than the worst-fit or
+   alternate-fit algorithms.
+
+   The "size" values in the items and capacity arguments must be comparable,
+   but they are unitless from the perspective of this function.
+
+   The function assumes that the list of items may be used destructively, if
+   needed.  This avoids the overhead of having the function make a copy of the
+   list, if this is not required.  Callers should pass items.copy() if they do
+   not want their version of the list modified.
+
+   The function returns a list of chosen items and the unitless amount of
+   capacity used by the items.
+
+   @param items: Items to operate on
+   @type items: dictionary, keyed on item, of (item, size) tuples, item as string and size as integer
+
+   @param capacity: Capacity of container to fit to
+   @type capacity: integer
+
+   @returns: Tuple (items, used) as described above
+   """
+
+   # Use dict since insert into dict is faster than list append
+   included = { }
+
+   # Sort the list from largest to smallest
+   itemlist = items.items()
+   itemlist.sort(lambda x,y: cmp(y[1][1], x[1][1]))  # sort descending
+   keys = []
+   for item in itemlist:
+      keys.append(item[0])
+
+   # Search the list
+   used = 0
+   remaining = capacity
+   for key in keys:
+      if remaining == 0:
+         break
+      if remaining - items[key][1] >= 0:
+         included[key] = None
+         used += items[key][1]
+         remaining -= items[key][1]
+
+   # Return the results
+   return (included.keys(), used)
+
+
+#######################
+# worst_fit() function
+#######################
+
+def worst_fit(items, capacity):
+
+   """
+   Implements the worst-fit knapsack algorithm.
+
+   The worst-fit algorithm proceeds through an a sorted list of items (sorted
+   from smallest to largest) until running out of items or meeting capacity
+   exactly.  If capacity is exceeded, the item that caused capacity to be
+   exceeded is thrown away and the next one is tried.  The algorithm
+   effectively includes the maximum number of items possible in its search for
+   optimal capacity utilization.  It tends to be somewhat slower than either
+   the best-fit or alternate-fit algorithm, probably because on average it has
+   to look at more items before completing.
+
+   The "size" values in the items and capacity arguments must be comparable,
+   but they are unitless from the perspective of this function.
+
+   The function assumes that the list of items may be used destructively, if
+   needed.  This avoids the overhead of having the function make a copy of the
+   list, if this is not required.  Callers should pass items.copy() if they do
+   not want their version of the list modified.
+
+   The function returns a list of chosen items and the unitless amount of
+   capacity used by the items.
+
+   @param items: Items to operate on
+   @type items: dictionary, keyed on item, of (item, size) tuples, item as string and size as integer
+
+   @param capacity: Capacity of container to fit to
+   @type capacity: integer
+
+   @returns: Tuple (items, used) as described above
+   """
+
+   # Use dict since insert into dict is faster than list append
+   included = { }
+
+   # Sort the list from smallest to largest
+   itemlist = items.items()
+   itemlist.sort(lambda x,y: cmp(x[1][1], y[1][1]))    # sort ascending
+   keys = []
+   for item in itemlist:
+      keys.append(item[0])
+
+   # Search the list
+   used = 0 
+   remaining = capacity
+   for key in keys:
+      if remaining == 0:
+         break
+      if remaining - items[key][1] >= 0:
+         included[key] = None
+         used += items[key][1]
+         remaining -= items[key][1]
+
+   # Return results
+   return (included.keys(), used)
+
+
+###########################
+# alternate_fit() function
+###########################
+
+def alternate_fit(items, capacity):
+
+   """
+   Implements the alternate-fit knapsack algorithm.
+
+   This algorithm (which I'm calling "alternate-fit") tries to balance small
+   and large items to achieve better end-of-disk performance.  Instead of just
+   working one direction through a list, it alternately works from the start
+   and end of a sorted list (sorted from smallest to largest), throwing away
+   any item which causes capacity to be exceeded.  The algorithm tends to be
+   slower than the best-fit and first-fit algorithms, and slightly faster than
+   the worst-fit algorithm, probably because of the number of items it
+   considers on average before completing.  It often achieves slightly better
+   capacity utilization than the worst-fit algorithm, while including slighly
+   fewer items.
+
+   The "size" values in the items and capacity arguments must be comparable,
+   but they are unitless from the perspective of this function.
+
+   The function assumes that the list of items may be used destructively, if
+   needed.  This avoids the overhead of having the function make a copy of the
+   list, if this is not required.  Callers should pass items.copy() if they do
+   not want their version of the list modified.
+
+   The function returns a list of chosen items and the unitless amount of
+   capacity used by the items.
+
+   @param items: Items to operate on
+   @type items: dictionary, keyed on item, of (item, size) tuples, item as string and size as integer
+
+   @param capacity: Capacity of container to fit to
+   @type capacity: integer
+
+   @returns: Tuple (items, used) as described above
+   """
+
+   # Use dict since insert into dict is faster than list append
+   included = { }
+
+   # Sort the list from smallest to largest
+   itemlist = items.items()
+   itemlist.sort(lambda x,y: cmp(x[1][1], y[1][1]))    # sort ascending
+   keys = []
+   for item in itemlist:
+      keys.append(item[0])
+
+   # Search the list
+   used = 0 
+   remaining = capacity
+
+   front = keys[0:len(keys)/2]
+   back = keys[len(keys)/2:len(keys)]
+   
+   i = 0
+   j = 0
+
+   while remaining > 0 and (i < len(front) or j < len(back)):
+      if i < len(front):
+         if remaining - items[front[i]][1] >= 0:
+            included[front[i]] = None
+            used += items[front[i]][1]
+            remaining -= items[front[i]][1]
+         i += 1
+      if j < len(back):
+         if remaining - items[back[j]][1] >= 0:
+            included[back[j]] = None
+            used += items[back[j]][1]
+            remaining -= items[back[j]][1]
+         j += 1
+
+   # Return results
+   return (included.keys(), used)
+
+
+#####################
+# recurse() function
+#####################
+
+def recurse(basedir):
+
+   """
+   Recurses through a directory, building a list of files in it.
+
+   Returns a tuple {(items, count, size)}::
+
+      - {items}: dictionary mapping filename to tuple of {(filename, size)}
+      - {count}: total number of files in the {items} directory (for convenience)
+      - {size}: total number of bytes among all files in the {items} dictionary
+   
+   @param basedir: Base directory to recurse through
+   @type basedir: string
+
+   @returns: Tuple {(items, count, size)} as described above.
+   """
+
+   items = { }
+   count = 0
+   size = 0.0
+
+   def visit(items, dir, entries):
+      for entry in entries[:]:
+         entrypath = os.path.join(dir, entry)
+         if os.path.isfile(entrypath):
+            items[entrypath] = None
+
+   os.path.walk(basedir, visit, items)
+
+   count = len(items.keys())
+   for key in items.keys():
+      bytes = os.stat(key)[6]       # this is the size element, in bytes
+      items[key] = (key, bytes)
+      size += bytes
+
+   return(items, count, size)
+
+
+#######################
+# partition() function
+#######################
+
+def partition(items, function, capacity):
+
+   """
+   Partitions a list of files into a number of smaller sets.
+
+   The {items} parameters is assumed to be in a form as returned by the
+   L{recurse} function.
+
+   The result is a list of dictionaries, one dictionary per set.  Each
+   dictionary has the following keys::
+
+      - {name}: Name of the set, i.e. {"set0000001"}
+      - {capacity}: Capacity of the set, in bytes
+      - {used}: Number of bytes used
+      - {utilization}: Capacity utilization, as a percentage
+      - {count}: Number of files in the set
+      - {files}: List of files in the set
+
+   @param items: dictionary mapping filename to tuple of {(filename, size)}
+   @type items: dictionary
+
+   @returns: List of dictionaries, as described above
+   """
+
+   sets = []
+   setid = 0
+   while items.keys() > 0:
+      setid += 1
+      (files, bytes) = function(items.copy(), capacity)
+      if bytes == 0.0: break # can't succeed ever again if this happens
+      for key in files: del items[key] 
+      sets.append({'name'        : "set%07d" % setid,
+                   'capacity'    : capacity,
+                   'used'        : bytes,
+                   'utilization' : (bytes/capacity * 100.0),
+                   'count'       : len(files),
+                   'files'       : files })
+   return sets
+
+
+##########################
+# writeresults() function
+##########################
+
+def writeresults(sets, attempted):
+      
+   """
+   Writes out files based on set data.
+
+   The {sets} parameter is assumed to be in a form as returned by the
+   L{partition} function.
+   
+   Set files are written to the current directory in the form name.txt, where
+   name is taken from the the set dictionary's {name} element.
+
+   @param sets: set of partition dictionaries
+   @type sets: set of dictionaries
+
+   @param attempted: total number of files we attempted to partition
+   @type attempted: integer
+   """
+
+   total = 0
+   for set in sets:
+      total += set['count']
+   print "Created %d sets including %d total files." % (len(sets), total)
+   if total < attempted:
+      print "WARNING: %d files are not accounted for in these sets!" % (attempted - total)
+      print "         You may want to change the capacity and re-run."
+   print ""
+
+   for set in sets:
+      print("   %s: %11.0f bytes (%6.2f%%) among %7d file(s)" %
+            (set['name'], set['used'], set['utilization'], set['count']))
+      fp = open("%s.txt" % set['name'], "w")
+      for line in set['files']:
+         fp.write("%s\n" % line)
+      fp.close()
+
+   print ""
+
+
+#########################
+# getcapacity() function
+#########################
+
+def getcapacity(input, cushion):
+
+   """
+   Parses a capacity string and cushion to determine final storage capacity per
+   fileset.
+
+   The capacity string may be either for a predefined media type, or an
+   arbitrary unit passed in by the user.
+
+   Example of media capacity string include {"650MBCD"}, {"4.3GBDVD"}.  We can
+   add more entries as they become known and useful.
+
+   The arbitrary capacity string must match the regular expression
+   {([0-9]*)([KMB]?B)}. For instance, {"12B"}, {"1024KB"} and {"4GB"} are all
+   valid.
+
+   The space cushion, expressed as a floating-point percentage, is subtracted
+   from the original capacity.  For instance, a cushion of "1.5" (1.5%) results
+   in a final capacity that is 98.5% of the original capacity.
+
+   @param input: Input from user, specifying a capacity 
+   @type input: string as described above
+
+   @param cushion: Input from user, specifying a space cushion
+   @type cushion: floating point number as described above 
+
+   @returns: Storage capacity, taking into account cushion, converted to bytes 
+   """
+
+   cushionpct = (100.0 - float(cushion)) / 100.0
+
+   matchmedia = re.compile("^(650MB|700MB|4\.3GB)[ ]?(DVD|CD)$").search(input)
+   if matchmedia is not None:
+      if matchmedia.group(1) == "650MB" and matchmedia.group(2) == "CD":
+         return (650.0 * BYTES_PER_MBYTE) * cushionpct
+      elif matchmedia.group(1) == "700MB" and matchmedia.group(2) == "CD":
+         return (700.0 * BYTES_PER_MBYTE) * cushionpct
+      elif matchmedia.group(1) == "4.3GB" and matchmedia.group(2) == "DVD":
+         return (4.3 * BYTES_PER_GBYTE) * cushionpct
+      else:
+         raise Exception("Unhandled media variation \"%s\"." % input)
+
+   matchsize = re.compile("^([0-9]*)[ ]?([KMG]?B)$").search(input)
+   if matchsize is not None:
+      if matchsize.group(2) == "B":
+         return (float(matchsize.group(1))) * cushionpct
+      elif matchsize.group(2) == "KB":
+         return (float(matchsize.group(1)) * BYTES_PER_KBYTE) * cushionpct
+      elif matchsize.group(2) == "MB":
+         return (float(matchsize.group(1)) * BYTES_PER_MBYTE) * cushionpct
+      elif matchsize.group(2) == "GB":
+         return (float(matchsize.group(1)) * BYTES_PER_GBYTE) * cushionpct
+   else:
+      raise Exception("Invalid capacity string \"%s\"." % input)
+
+
+#########################
+# getfunction() function
+#########################
+
+def getfunction(algorithm):
+
+   """
+   Chooses the appropriate knapsack function based on a string.
+
+   The strings map to functions like so:
+
+      - {first}: first_fit
+      - {best}: best_fit
+      - {worst}: worst_fit
+      - {alternate}: alternate_fit
+   
+   @param algorithm: String specifying an knapsack algorithm
+   @type algorithm: string, one of "first", "best", "worst", "alternate"
+   
+   @returns: Reference to the appropriate knapsack function
+   """
+
+   if algorithm == "first":
+      return first_fit
+   if algorithm == "best":
+      return best_fit
+   if algorithm == "worst":
+      return worst_fit
+   if algorithm == "alternate":
+      return alternate_fit
+   else:
+      raise Exception("Invalid algorithm \"%s\"" % algorithm)
+
+
+###################
+# usage() function
+###################
+
+def usage():
+   """Prints out program usage information."""
+   print ""
+   print "Usage: %s <base-dir> <set-capacity> <cushion-pct> <algorithm>" % os.path.basename(sys.argv[0])
+   print ""
+   print "Divides all of the files recursively found in base-dir into"
+   print "sets of a certain capacity."
+   print ""
+   print "Capacity can be a known media definition, such as \"650MBCD\","
+   print "\"700MBCD\", \"4.3GBDVD\", or capacity can be an arbitrarily "
+   print "defined size in \"B\", \"KB\", \"MB\" or \"GB\".  "
+   print ""
+   print "Cushion-pct allows you to tune your capacity.  This unit is a"
+   print "percentage of free space that will be set aside for each set."
+   print ""
+   print "Algorithm may be one of \"first\", \"best\", \"worst\", \"alternate\"."
+   print ""
+   print "Examples: "
+   print "1) span /usr 1GB 0 best"
+   print "2) span /photos 4.3GBDVD 2 first"
+   print "3) span /var \"700MB CD\" 1.5 worst"
+   print ""
+   print "Sets will be written to files setNNNNNNN.txt in the working directory."
+
+
+##################
+# main() function
+##################
+
+def main():
+
+   """Main routine for program."""
+
+   # Handle arguments
+   basedir = None
+   capacity = None
+   cushion = None
+   function = None
+
+   # Parse command-line
+   try:
+      basedir = sys.argv[1]
+      capacity = sys.argv[2]
+      cushion = sys.argv[3]
+      function = sys.argv[4]
+   except Exception:
+      usage()
+      sys.exit(1)
+
+   # Refine operations
+   try:
+      capacity = getcapacity(capacity, cushion)
+      function = getfunction(function)
+   except Exception:
+      usage()
+      sys.exit(1)
+
+   # Print a starting banner
+   print ""
+   print "Cedar Solutions Spanning Utility"
+   print "================================"
+   print ""
+   print "Partitioning files in %s." % basedir
+   print "Target capacity (less cushion) is %.0f bytes per set." % capacity
+   print "Set files will be written to the current directory."
+   print ""
+
+   # Get a list of files to process
+   print "Building list of files to partition..."
+   (items, count, size) = recurse(basedir)
+   if count == 0:
+      print "No files to process."
+      sys.exit(0)
+   print "Base directory contains about %.2f MB of data in %d files." % (size/BYTES_PER_MBYTE, count)
+   print "Estimate %d set(s) will be required." % (int(size/capacity) + 1)
+   print ""
+
+   # Partition the file set and write the results
+   print "Partitioning list of files..."
+   sets = partition(items, function, capacity)
+   print ""
+
+   # Write results out
+   writeresults(sets, count)
+
+   # Print a closing message
+   print "Completed with no errors."
+   print ""
+      
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+   main()
+

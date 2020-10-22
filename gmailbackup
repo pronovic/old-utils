@@ -1,0 +1,348 @@
+#!/usr/bin/python -u
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2010-2011,2013 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Authors  : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.5)
+# Revision : $Id: gmailbackup 1332 2013-05-09 20:39:06Z pronovic $
+# Purpose  : Backs up gmail email via getmail
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Notes
+########################################################################
+
+"""
+Backs up gmail email via getmail.
+
+I have been using getmail to back up my gmail inbox since late 2009.  I chose
+getmail because -- unlike other solutions like offlineimap -- it's always
+one-way.  Even if something gets screwed up on the target backup system (i.e.
+some emails get deleted), this doesn't impact gmail.  
+
+This worked pretty well for a while.  However, in late May of 2010, Google made
+a change to gmail, and now the act of retrieving a message via IMAP causes the
+message to be marked as read.  That was really confusing for a while, until I
+figured out what was going on.  Every morning, lots of messages were "missing".  
+
+As of getmail v4.26.0, this has been fixed.  The getmail script now uses an
+IMAP option called PEEK.  Most IMAP servers (including gmail) do not mark
+messages as read when this option is used.  See:
+
+   http://bugs.debian.org/668602
+
+For now, I am still planning to run my backup once per week and send the
+notification email just like before, as a warning that something might have
+gotten lost.  Once I have some confidence that nothing is getting lost, I may
+change the behavior.
+
+Below is a sample getmail configuration file::
+
+   [retriever]
+   type = SimpleIMAPSSLRetriever
+   server = imap.gmail.com
+   username = user@gmail.com
+   password = my-password
+   mailboxes = ("[Gmail]/All Mail",)
+   port = 993
+
+   [destination]
+   type = Maildir
+   path = /opt/backup/gmail/accounts/user/
+
+   [options]
+   received = false
+   delivered_to = false
+   read_all = false
+   verbose = 0
+
+It seems like it might be a good idea to blow away the backup and start over
+periodically.  Over the long run, I end up with a lot more files in my backup
+than at gmail proper -- probably because files I delete in gmail don't get
+deleted from the backup.  If you want to start over, make sure you recreate the
+maildir (the cur, new, and tmp directories) and also blow away the oldmail file
+that getmail creates (found alongside the config file, at last on my system).
+The oldmail file is apparently getmail's index.  If you forget to remove it,
+getmail will only download new messages, and your backup will be incomplete.
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+"""
+
+########################################################################
+# Imported modules
+########################################################################
+
+# System modules
+import sys
+import os
+import getopt
+import socket
+import smtplib
+import getpass
+from subprocess import Popen, PIPE, call
+from datetime import datetime
+from email.MIMEText import MIMEText
+from ConfigParser import ConfigParser
+
+
+########################################################################
+# Utility functions
+########################################################################
+
+def usage():
+   """
+   Prints out program usage information.
+   """
+   sys.stderr.write("\n")
+   sys.stderr.write("Usage: %s [--debug] --getmaildir=dir --rcfile=file\n" % os.path.basename(sys.argv[0]))
+   sys.stderr.write("\n")
+   sys.stderr.write("This program backs up all gmail data via the getmail utility.  It is\n")
+   sys.stderr.write("a thin wrapper around getmail.  The two command-line arguments are passed\n")
+   sys.stderr.write("directly to getmail.  When the backup is complete, an email notification is\n")
+   sys.stderr.write("sent, warning the backed-up account that emails might appear \"missing\".\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("You need to understand how to use getmail in order to use this program.  See\n")
+   sys.stderr.write("the source code for a sample configuration file.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("If you use the --debug option, then it's assumed you're running the program\n")
+   sys.stderr.write("interactively.  No email will be sent.  The getmail utility will be invoked\n")
+   sys.stderr.write("with --verbose and all output will be dumped to stdout and stderr.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Note: You can't run this process as root.  You have to execute it as some other\n")
+   sys.stderr.write("user.  This is a getmail limitation, so gmailbackup checks for it up front.\n")
+   sys.stderr.write("\n")
+
+def parseArguments(args):
+   """
+   Parse command-line arguments.
+   Calls sys.exit(1) if command-line arguments are invalid
+   @param args: Command-line arguments, like sys.argv[1:]
+   @return: Tuple of (getmaildir, rcfile)
+   """
+   debug = False
+   getmaildir = None
+   rcfile = None
+
+   switches = { }
+   opts, actions = getopt.getopt(sys.argv[1:], "hdg:r:", [ "help", "debug", "getmaildir=", "rcfile=", ])
+   for o,a in opts:  # push the switches into a hash
+      switches[o] = a
+
+   if switches.has_key("-h") or switches.has_key("--help"):
+      usage()
+      sys.exit(1)
+   if switches.has_key("-d") or switches.has_key("--debug"):
+      debug = True
+   if switches.has_key("-g"): 
+      getmaildir = switches["-g"]
+   elif switches.has_key("--getmaildir"):
+      getmaildir = switches["--getmaildir"]
+   if switches.has_key("-r"): 
+      rcfile = switches["-r"]
+   elif switches.has_key("--rcfile"):
+      rcfile = switches["--rcfile"]
+
+   if rcfile is None or getmaildir is None:
+      usage()
+      sys.exit(1)
+
+   return (debug, getmaildir, rcfile)
+
+def parseAccount(getmaildir, rcfile):
+   """
+   Parse the gmail account out of the getmail rcfile.
+   @param getmaildir: Configured getmail directory
+   @param rcfile: Configured getmail rcfile
+   @return: Gmail account parsed out of getmail config file
+   """
+   path = os.path.join(getmaildir, rcfile)
+   if not os.path.exists(path):
+      raise Exception("Unable to open getmail config file: %s" % path)
+   config = ConfigParser()
+   config.read(path)
+   try:
+      account = config.get("retriever", "username")
+   except:
+      raise Exception("Unable to parse getmail config file: %s" % path)
+   if not account.endswith("@gmail.com"):
+      raise Exception("Account must be in the form user@gmail.com: %s" % account)
+   return account
+
+def executeBackup(debug, getmaildir, rcfile):
+   """
+   Execute the backup using /usr/bin/getmail.
+   @param debug: Use debug mode (just dump output rather than capturing)
+   @param getmaildir: Configured getmail directory
+   @param rcfile: Configured getmail rcfile
+   """
+   if debug:
+      command = [ "/usr/bin/getmail", "--verbose", "--getmaildir=%s" % getmaildir, "--rcfile=%s" % rcfile, ]
+      call(command)
+   else:
+      command = [ "/usr/bin/getmail", "--getmaildir=%s" % getmaildir, "--rcfile=%s" % rcfile, ]
+      pipe = Popen(command, stdout=PIPE, stderr=PIPE)
+      stdout, stderr = pipe.communicate()
+      if len(stderr) > 0:
+         # getmail does not return a non-zero exit status on error.
+         # Instead, we have to assume that output on stderr represents failure.
+         raise Exception(stderr)
+
+def getDomain():
+   """
+   Get the sending domain to use for emails
+   """
+   if os.path.exists("/etc/mailname"):
+      # Debian machines use this value as the 'from' domain
+      return open("/etc/mailname").readline()[:-1]
+   else:
+      # Fallback on FQDN (fully-qualified domain name), which might not work
+      return socket.getfqdn()
+
+def sendEmail(to, subject, message):
+   """
+   Send an email via smtplib.
+   @param to: Address that email should be sent to
+   @param subject: Email subject
+   @param message: Message body
+   """
+   sender = "\"Gmail Backup\" <%s@%s>" % (getpass.getuser(), getDomain())
+   msg = MIMEText(message)
+   msg['From'] = sender
+   msg['To'] = to
+   msg['Subject'] = subject
+   s = smtplib.SMTP()
+   s.connect()
+   s.sendmail(sender, [to], msg.as_string())
+   s.close()
+
+def sendSuccessNotification(account, getmaildir, rcfile, start, finish):
+   """
+   Send an email notification that the backup succeeded.
+   @param account: Gmail account to notify, i.e. user@gmail.com
+   @param getmaildir: Configured getmail directory
+   @param rcfile: Configured getmail rcfile
+   @param start: Time that backup started
+   @param finish: Time that backup completed
+   """
+   domain = getDomain()
+   subject = "Gmail Backup notification for: %s" % account
+   startTime = start.strftime("%m/%d/%Y %I:%M:%S%p %z")
+   finishTime = finish.strftime("%m/%d/%Y %I:%M:%S%p %z")
+   message = """
+The gmailbackup process on %s has run for account %s.
+
+Command-line: gmailbackup --getmaildir=%s --rcfile=%s
+Started: %s
+Finished: %s
+
+If there were any unread messages in your gmail account when this process
+started, then these messages may have been marked as read and might appear to
+be "missing".  (This should not happen with newer versions of the underlying
+getmail tool, v4.26.0 or better.)
+
+To find emails that may be "missing", you can use Gmail's advanced search.
+Click the little down arrow in the search box up top.  Look for the "Date
+within" field, and select something like "1 day" of "today".  Then click blue
+search button.  This will show you all of your mail for the past day.  You can
+choose other periods ("3 days", "1 week", etc.) if you want.
+
+If you find any emails unread from before the backup process ran, then probably
+nothing is missing.
+""" % (domain, account, getmaildir, rcfile, startTime, finishTime)
+   sendEmail(account, subject, message)
+
+def sendFailureNotification(account, getmaildir, rcfile, start, finish, error):
+   """
+   Send an email notification that the backup failed.
+   @param account: Gmail account to notify, i.e. user@gmail.com
+   @param getmaildir: Configured getmail directory
+   @param rcfile: Configured getmail rcfile
+   @param start: Time that backup started
+   @param finish: Time that backup completed
+   @param error: Exception that was caught
+   """
+   domain = getDomain()
+   subject = "Gmail Backup FAILED for: %s" % account
+   startTime = start.strftime("%m/%d/%Y %I:%M:%S%p %z")
+   finishTime = finish.strftime("%m/%d/%Y %I:%M:%S%p %z")
+   message = """
+The gmailbackup process on %s has FAILED for account %s.
+
+Command-line: gmailbackup --getmaildir=%s --rcfile=%s
+Started: %s
+Finished: %s
+
+Error:
+
+%s
+
+If there were any unread messages in your gmail account when this process
+started, then these messages MAY have been marked as read and MAY appear to be
+"missing".  (This should not happen with newer versions of the underlying
+getmail tool, v4.26.0 or better.)
+
+To find emails that may be "missing", you can use Gmail's advanced search.
+Click the little down arrow in the search box up top.  Look for the "Date
+within" field, and select something like "1 day" of "today".  Then click blue
+search button.  This will show you all of your mail for the past day.  You can
+choose other periods ("3 days", "1 week", etc.) if you want.
+""" % (domain, account, getmaildir, rcfile, startTime, finishTime, error.args[0])
+   sendEmail(account, subject, message)
+
+
+########################################################################
+# Main routine
+########################################################################
+
+def main():
+   """
+   Main routine for program.
+   """
+   start = datetime.now()
+   (debug, getmaildir, rcfile) = parseArguments(sys.argv[1:])
+   if os.geteuid() == 0:
+      print "This script cannot be run as root, due to underlying getmail limitations.\n"
+   else:
+      if debug:
+         executeBackup(debug, getmaildir, rcfile)
+      else:
+         account = parseAccount(getmaildir, rcfile)
+         try:
+            executeBackup(debug, getmaildir, rcfile)
+            sendSuccessNotification(account, getmaildir, rcfile, start, datetime.now())
+         except Exception, error:
+            sendFailureNotification(account, getmaildir, rcfile, start, datetime.now(), error)
+
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+   main()
+

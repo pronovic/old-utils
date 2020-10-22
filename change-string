@@ -1,0 +1,253 @@
+#!/usr/bin/perl
+# vim: set ft=perl:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2001-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Perl 5
+# Project  : change-string
+# Package  : N/A
+# Revision : $Id: change-string,v 1.8 2003/09/08 20:39:39 pronovic Exp $
+# Purpose  : Implementation
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# This file was composed using 8-space tabs and a width of 132 characters.
+
+########
+# Notes
+########
+
+#
+# This script does a global substitute/replace operation on a list of files.
+# It replaces a much clunkier version that I had previosly written in kshell
+# and sed.
+#
+
+
+################
+# Package setup
+################
+
+use FileHandle;
+use Getopt::Long;
+use strict vars;
+
+
+#################
+# Constant setup
+#################
+
+my $set         = 1;
+my $unset       = 0;
+my $blank       = "";
+
+my $fh = new FileHandle;
+my $def_wrap_lines = 0;
+
+
+########################
+# Variable declarations
+########################
+
+my $return = -1;
+
+my $case_opt    = $unset;
+my $help        = $unset;
+my $pattern;
+my $replacement;
+my @file_list;
+
+my $count;
+my $file;
+my $line;
+my @LINES;
+
+
+################################
+# Handle command-line arguments
+################################
+
+$return = GetOptions("i"    => \$case_opt, 
+                     "help" => \$help);
+
+if($return == 0)
+{
+   usage();
+   exit 1;
+}
+
+if($help == $set)
+{
+   usage();
+   exit 0;
+}
+
+$pattern = shift @ARGV;
+if(!defined $pattern)
+{
+   print "Argument 'pattern' is required.\n";
+   usage();
+   exit 1;
+}
+
+$replacement = shift @ARGV;
+if(!defined $replacement)
+{
+   print "Argument 'replacement' is required.\n";
+   usage();
+   exit 1;
+}
+
+@file_list = @ARGV;
+if($#file_list < 0)
+{
+   print "Argument 'file-list' is required.\n";
+   usage();
+   exit 1;
+}
+
+
+#####################
+# Search for pattern
+#####################
+
+# Use files from command-line for text-space
+FILE: foreach $file (@file_list)
+{
+
+   ########################
+   # Mark start of actions
+   ########################
+
+   print "$file...";
+
+
+   ######################
+   # Setup and open file
+   ######################
+
+   undef @LINES;
+   $count = 0;
+
+   if (! -w $file)
+   {
+      print "not writable; skipping.\n";
+      next FILE;
+   }
+
+   open $fh, "<$file" or die "Unexpectedly unable to open $file for read.  Terminating.\n";
+   @LINES = <$fh>;
+   close $fh;
+
+
+   ###############################
+   # Do pattern matching on lines
+   ###############################
+
+   foreach $line (@LINES)
+   {
+      if($case_opt == $set)
+      {
+         if($line =~ /$pattern/i)
+         {
+            $line =~ s/$pattern/$replacement/ig;
+            $count += 1;
+         }
+      }
+      else 
+      {
+         if($line =~ /$pattern/)
+         {
+            $line =~ s/$pattern/$replacement/g;
+            $count += 1;
+         }
+      }
+   }
+
+   
+   ####################################
+   # Write the new version of the file
+   ####################################
+
+   if($count == 0)
+   {
+      print "no replacements made.\n";
+   }
+   else
+   {  
+      if($count == 1)
+      {
+         print "1 replacement made.\n";
+      }
+      else
+      {
+         print "$count replacements made.\n";
+      }
+
+      open $fh, ">$file" or die "\nUnexpectedly unable to open $file for write.  Terminating.\n";
+      foreach $line (@LINES)
+      {
+         print $fh $line
+      }
+      close $fh;
+   }
+
+}
+
+
+################
+# Exit normally
+################
+
+exit 0;
+
+
+###################
+# Usage subroutine
+###################
+
+sub usage()
+{
+   print "\n";
+   print "Usage: change-string [-i] pattern replacement file-list\n";
+   print "\n";
+   print "   -i             - Make pattern match case-INsensitive\n";
+   print "   pattern        - Pattern to search for (perl regex)\n";
+   print "   replacement    - Replacement string\n";
+   print "   file-list      - File or files to look through\n";
+   print "\n";
+   print "Searches through each document in the file-list for pattern,\n";
+   print "and replaces pattern with replacement.  Use the -i switch to\n";
+   print "make the pattern match case insensitive.\n";
+   print "\n";
+   print "Please note that, right now, replacement must be a string and\n";
+   print "cannot successfully use the Perl regex pattern match variables\n";
+   print "\${1}, \${2}, etc. to substitute in portions of the original\n";
+   print "pattern.  This functionality will be added in the future.\n";
+   print "\n";
+   print "This program is copyright (c) 2001 Kenneth J. Pronovici and\n";
+   print "is distributed under the GNU GPL; see http://www.gnu.org/\n";
+   print "for more information.\n";  
+}    

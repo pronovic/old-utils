@@ -1,0 +1,300 @@
+#!/usr/bin/env python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2004 Kenneth J. Pronovici.
+# Some parts copyright (c) 2004 Leif K-Brooks as indicated.
+#
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation
+# files (the "Software"), to deal in the Software without
+# restriction, including without limitation the rights to use,
+# copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following
+# conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+# OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+# OTHER DEALINGS IN THE SOFTWARE.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.3)
+# Project  : Utilities
+# Revision : $Id: py-stats 490 2004-11-07 19:30:16Z pronovic $
+# Purpose  : Provides line-count information for Python files.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Module documentation
+########################################################################
+
+"""
+Provides line-count information for Python files.
+
+This is a Python script that provides line-count information for Python source
+files.  The output is structured to look roughly like the output from my
+existing c-stats script, so it includes information about total lines, logical
+lines of code (LOC), comment-only lines and whitespace-only lines.
+
+The logical LOC information is derived using the Python compiler module, and is
+taken directly from the linecount.py script written by Leif K-Brooks and
+announced on comp.lang.python.announce.   The rest of the code I wrote myself
+based roughly on the structure of c-stats.
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+@author: Leif K-Brooks
+"""
+
+########################################################################
+# Imported modules
+########################################################################
+
+import sys
+try:
+   import os
+   import re
+   import getopt
+   import compiler
+except ImportError, e:
+    print "Failed to import modules: %s" % e
+    print "Please try setting the PYTHONPATH environment variable."
+    sys.exit(1)
+
+
+########################################################################
+# Module-wide variables
+########################################################################
+
+# One-line statements, like return. 
+# Leif suggests that we might want to make 'pass' configurable, but I don't care.
+one_liners = (compiler.ast.Pass, compiler.ast.Discard, compiler.ast.Print,
+              compiler.ast.Printnl, compiler.ast.Raise, compiler.ast.Exec,
+              compiler.ast.Import, compiler.ast.From, compiler.ast.Assign,
+              compiler.ast.Break, compiler.ast.Return, compiler.ast.Continue,
+              compiler.ast.Yield, compiler.ast.Global)
+
+
+################################
+# Various logical LOC functions
+################################
+# These are the functions taken from Leif's original code.  The original
+# count_file() function has been renamed count_logical().
+
+def count_logical(filename):
+   """
+   Count the logical lines of code in a file.
+   @param filename: Name of file to parse
+   @type filename: String representing a path on disk.
+   @return: Count of lines of code in file, or zero if there is a syntax error.
+   @raise ValueError: If the file does not exist
+   """
+   try:
+      return count_node(compiler.parseFile(filename))
+   except SyntaxError:
+      return 0
+   except IOError:
+      raise ValueError, "File doesn't exist."
+
+def count_nodes(nodes):
+   """
+   Count the lines of code in a sequence of AST nodes.
+   @param nodes: Nodes to parse.
+   @type nodes: List of AST nodes from the compiler.ast module.
+   @return: Count of lines of code among passed-in nodes.
+   """
+   return sum([count_node(node) for node in nodes])
+
+def count_node(node):
+   """
+   Counts the lines of code in an AST node.
+   @param node: Node to parse.
+   @type node: AST node from the compiler.ast module.
+   @return: Count of lines of code in node.
+   """
+   if isinstance(node, compiler.ast.Stmt):
+      return count_nodes(node.nodes)
+   elif isinstance(node, compiler.ast.Module):
+      return count_nodes(node.node.nodes)
+   elif isinstance(node, (compiler.ast.Class, compiler.ast.Function)):
+      return 1 + count_nodes(node.code.nodes)
+   elif isinstance(node, compiler.ast.If):
+      lines = sum([1 + count_nodes(test[1].nodes) for test in node.tests])
+      if node.else_ is not None:
+         lines += count_nodes(node.else_.nodes)
+      return lines
+   elif isinstance(node, (compiler.ast.For, compiler.ast.While)):
+      lines = 1 + count_nodes(node.body.nodes)
+      if node.else_ is not None:
+         lines += 1 + count_nodes(node.else_.nodes)
+      return lines
+   elif isinstance(node, compiler.ast.TryExcept):
+      lines = 1 + count_nodes(node.body.nodes)
+      lines += sum([1 + count_nodes(handler[2].nodes) for handler in node.handlers])
+      if node.else_ is not None:
+         lines += 1 + count_nodes(node.else_.nodes)
+      return lines
+   elif isinstance(node, compiler.ast.TryFinally):
+      return 2 + count_nodes(node.body.nodes) + count_nodes(node.final.nodes)
+   elif isinstance(node, one_liners):
+      return 1
+   else:
+      return 0
+
+
+###########################
+# Physical count functions
+###########################
+
+def count_physical(filename):
+   """
+   Does physical line counts in a file.
+
+   Counts the overall number of lines as well as the number of comment only and
+   whitespace only lines.  Comment-only lines are lines that either start with
+   # or have only whitespace before the first # character.
+
+   @param filename: Name of file to parse
+   @type filename: String representing a path on disk.
+
+   @return: Tuple of (overall, whitespace, comment)
+   """
+
+   overall = 0;
+   whitespace = 0;
+   comments = 0;
+
+   comment_pattern = re.compile("^\s*#.*$");
+   whitespace_pattern = re.compile("^\s*$")
+
+   fp = open(filename);
+   for line in fp:
+      overall += 1
+      if comment_pattern.search(line):
+         comments += 1;
+      elif whitespace_pattern.search(line):
+         whitespace += 1;
+
+   return(overall, whitespace, comments)
+
+
+########################
+# statistics() function
+########################
+
+def statistics(filename):
+   """
+   Generates statistics for a particular file.
+
+   Two passes are taken over the file.  The first pass counts overall lines in
+   the file, number of comment-only lines and number of whitespace-only lines.
+   The second pass then counts logical lines of code (LOC) using the Python
+   parser.
+
+   @param filename: Name of file to parse
+   @type filename: String representing a path on disk.
+
+   @return: Tuple (overall, loc, comments, whitespace)
+   """
+   (overall, comments, whitespace) = count_physical(filename)
+   loc = count_logical(filename)
+   return (overall, loc, comments, whitespace)
+
+
+###################
+# usage() function
+###################
+
+def usage():
+   """
+   Provides usage information.
+   """
+   print ""
+   print " Usage: py-stats [--help] file-list"
+   print ""
+   print "   --help     - Show this message"
+   print "   file-list  - File or files to look through"
+   print ""
+   print " Report Python-related statistics for files in the file"
+   print " list, including number of blank lines, number of comment-"
+   print " only lines and number of source-code lines."
+   print ""
+   print " Note that only Python modules (files that have a .py"
+   print " extension) can be processed."
+   print ""
+   print " This program is copyright (c) 2004 Kenneth J. Pronovici."
+   print " Based in part on code (c) 2004 Leif K-Brooks."
+   print " Distributed under the open-source MIT license."
+   print ""
+
+
+##################
+# main() function
+##################
+
+def main(argv):
+
+   overall = 0    # overall lines, including comments and whitespace
+   loc = 0        # lines of code
+   comments = 0   # lines of comments
+   whitespace = 0 # lines of whitespace
+
+   try:
+      opts, filenames = getopt.getopt(argv, "h", [ 'help', ])
+   except getopt.GetoptError:
+      usage()
+      sys.exit(1)
+
+   if len(filenames) == 0:
+      usage()
+      sys.exit(2)
+
+   for filename in filenames:
+      if os.path.isfile(filename) and filename.endswith(".py"):
+         try:
+            (o, l, c, w) = statistics(filename)
+            overall += o
+            loc += l
+            comments += c
+            whitespace += w
+         except ValueError:
+            print "Error parsing %s." % filename
+      else:
+         print "Skipping %s (not a Python file)." % filename
+
+   if float(overall) > 0.0:
+      print ""
+      print "Overall analyzed lines......: %d" % overall
+      print "Total lines of code (LOC)...: %d (%2.2f%%)" % (loc, float(loc)/float(overall) * 100.0)
+      print "Comment-only lines..........: %d (%2.2f%%)" % (comments, float(comments)/float(overall) * 100.0)
+      print "Non-comment whitespace......: %d (%2.2f%%)" % (whitespace, float(whitespace)/float(overall) * 100.0)
+   else:
+      print "No lines found among files on command-line."
+
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+    main(sys.argv[1:])
+      

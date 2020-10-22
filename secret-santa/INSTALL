@@ -1,0 +1,57 @@
+# vim: set ft=text80:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Project  : Secret Santa
+# Revision : $Id: INSTALL 1289 2010-12-02 03:08:10Z pronovic $
+# Purpose  : Installation instructions
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# This file was created with a width of 80 characters, and NO tabs.
+
+#
+# Installing package dependencies
+## 
+
+The Secret Santa script relies on a number of outside packages.  Before
+installing Secret Santa, you must make sure that certain dependencies
+are met.
+
+First, Secret Santa is written in and depends on Python
+(http://www.python.org), version 2.5 or greater.  Most Linux
+distributions already have Python pre-packaged.  Cedar Backup also
+depends on the Python 4Suite XML package, so it must be installed before
+you install Secret Santa itself.  
+
+Finally, in order to run the secret-santa script, you must have some
+sort of MTA (mail transfer agent), such as Exim, Postfix or Sendmail,
+installed.  I really have no idea what to do for this requirement
+under Windoze.  If you get it working, please let me know how you did
+it, so I can amend this documentation.
+
+
+#
+# Installing the package
+##
+
+Secret Santa is distributed in standard Python distutils form.  Use:
+
+   python setup.py --help
+
+For more information on how to install it.  You must have a Python
+interpreter version 2.5 or better to use these modules.
+
+In the simplest case, you will probably just use:
+
+   python setup.py install
+
+to install to your standard Python site-packages directory.  Note that on
+UNIX systems, you will probably need to do this as root.
+

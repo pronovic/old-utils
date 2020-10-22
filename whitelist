@@ -1,0 +1,371 @@
+#!/usr/bin/python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2004-2005,2007,2009 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Authors  : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.4)
+# Revision : $Id: whitelist 1282 2009-10-18 17:15:31Z pronovic $
+# Purpose  : Generate a procmail whitelist based on several sources
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Notes
+########################################################################
+
+"""
+This program generates an email address whitelist, suitable for use with
+procmail, based on several sources.  
+
+You can use the resulting whitelist in your .procmailrc by adding these
+recipes::
+
+   # Remove any existing fake headers
+   :0 fwh
+   * ^X-Whitelist
+   | formail -I"X-Whitelist"
+
+   # Apply our whitelist file
+   :0
+   * ? formail -x"From" -x"From:" -x"Sender:" -x"Return-Path:" \
+       | sed 's/^.*<//' \
+       | sed 's/>.*$//' \
+       | sed 's/^ *//'  \
+       | sed 's/ .*$//' \
+       | sort | uniq    \
+       | egrep -isq -f ${HOME}/.whitelist 2>/dev/null
+   {
+      :0 fwh
+      | formail -A "X-Whitelist: Yes"
+   }
+
+Then, later, filter on the X-Whitelist header field as desired.
+
+The script processes one or more hand-maintained lists, addressbooks or
+sent-mail folders.  Hand-maintained lists are files containing one email
+address per line.  Addressbooks are assumed to be in mutt format.  Sent mail
+folders are assumed to be in mbox format.  The whitelist will contain unique
+emails from among all three sources, including all To, CC and BCC emails from
+the messages in the sent mail folders.  
+
+Optionally, you can also exclude certain addresses.  Excluded addresses will
+never be placed into your whitelist, even if they exist in one of the other
+sources you have identified.  Exclusion files have the same format as hand-
+maintained lists.
+
+Remember that when you pass the whitelist to egrep, it assumes that the entries
+in the list are actually regular expressions.  This means that if something
+like 'juli' is placed into the whitelist, you will get matches on any sender
+address that contains 'juli'.  This is probably not what you want, but it is
+the default behavior for backwards compatibility.  If you want strict matching,
+use the --strict option.  This will generate whitelist entries anchored by ^
+and $ and containing escaped '.' characters, so that the sender email has to
+match the whitelisted email address exactly.
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+"""
+
+
+########################################################################
+# Imported modules
+########################################################################
+
+# System modules
+import sys
+import getopt
+import os
+import re
+
+
+#######################################################################
+# Functions
+#######################################################################
+
+###################
+# usage() function
+###################
+
+def usage(error=None):
+
+   """
+   Prints out program usage information.
+   """
+
+   if error is not None:
+      print "Error: %s" % error
+
+   print ""
+   print "Usage: %s [-s] [-l hand-list] [-a addressbook] [-f folder] [-e exclusions] whitelist" % os.path.basename(sys.argv[0])
+   print ""
+   print "Generates an email address whitelist, based on the hand-maintained"
+   print "lists, mutt-style addressbooks and sent-mail folders indicated on "
+   print "the command line.  Addresses listed in the exclusions file will"
+   print "never be placed into a whitelist."
+   print ""
+   print "Each of the switches may be specified more than once, for instance"
+   print "to provide more than one address book or exclusion list."
+   print ""
+   print "The whitelist will contain unique emails from among all three "
+   print "sources, including all To, CC and BCC emails from the messages"
+   print "in the sent mail folders."
+   print ""
+   print "If the -s option is used, then the output file will contain true"
+   print "regular expressions (anchored with ^ and $, and with . escaped)"
+   print "rather than just a list of email addresses."
+
+
+##########################
+# parseOptions() function
+##########################
+
+def parseOptions():
+
+   """
+   Parses command-line options, returning files to operate on.
+
+   The command line can contain any number of occurrences of hand-maintained
+   lists ("lists"), addressbooks ("addressbooks") sent-mail folders
+   ("folders"), and exclusion lists ("exclusions").  This function parses the
+   command-line and returns a tuple of lists, one for each type of file on the
+   command-line.  It also returns the name of the requested whitelist on disk
+   and a value for the optional strict flag.
+
+   @returns: Tuple (whitelist, strict, lists, addressbooks, folders, exclusions) as described above.
+
+   @raise getopt.GetoptError: if arguments are invalid
+   """
+
+   strict = False
+   lists = []
+   addressbooks = []
+   folders = []
+   exclusions = []
+
+   opts, args = getopt.getopt(sys.argv[1:], "sl:a:f:e:", [ "strict", "hand-list", "addressbook", "folder", "exclusions" ])
+   if len(args) != 1 or len(opts) < 1: 
+      raise getopt.GetoptError("Invalid arguments.")
+
+   for opt in opts:
+      if opt[0] == "-s" or opt[0] == "--strict":
+         strict = True
+      if opt[0] == '-l' or opt[0] == '--hand-list':
+         lists.append(opt[1])
+      if opt[0] == '-a' or opt[0] == '--addressbook':
+         addressbooks.append(opt[1])
+      if opt[0] == '-f' or opt[0] == '--folder':
+         folders.append(opt[1])
+      if opt[0] == '-e' or opt[0] == '--exclusions':
+         exclusions.append(opt[1])
+
+   return(args[0], strict, lists, addressbooks, folders, exclusions)
+
+
+###########################
+# parseHandList() function
+###########################
+
+def parseHandList(list):
+
+   """
+   Parses a hand-maintained list on disk.
+
+   The list is parsed line-by-line and all email addresses are placed into the
+   returned set.  Blank (empty) lines and lines starting with # (comment
+   character) are ignored.  Each non-blank, non-comment line is assumed to be a
+   valid email address.
+
+   @param list: List on disk to operate on
+   @type list: string, path to file on disk
+
+   @return Set of unique addresses parsed from the hand-maintained list.
+   @raise IOError If the list file cannot be opened.
+   """
+
+   comment = re.compile("^\w*#.*$")
+   blank = re.compile("^\w*$")
+
+   addresses = set()
+   for line in open(list).readlines():
+      if comment.match(line) or blank.match(line):
+         continue
+      address = line[:-1].strip()
+      addresses.add(address)
+
+   return addresses
+
+
+##################################
+# parseMuttAddressbook() function
+##################################
+
+def parseMuttAddressbook(addressbook):
+
+   """
+   Parses a mutt-style addressbook on disk.
+
+   The addressbook is parsed line-by-line and all email address are placed into
+   the emails dictionary.  All lines are assumed to be standard mutt
+   addressbook lines, which can have one of two forms::
+
+      alias ken "Ken Pronovici" <pronovic@ieee.org>
+      alias ken pronovic@ieee.org (Pronovici, Kenneth)
+
+   Any lines that do not match one of these two patterns are ignored.  
+
+   @param addressbook: Addressbook on disk to operate on
+   @type addressbook: string, path to file on disk
+
+   @return Set of unique addresses parsed from the addressbook.
+   @raise IOError If the addressbook file cannot be opened.
+   """
+
+   alias1 = re.compile('(^alias\s*)(\S*\s*)(".*"\s*)(<)(.*)(>$)')
+   alias2 = re.compile("(^alias\s*)(\S*\s*)(\S*)(\s*\(.*$)")
+
+   addresses = set()
+   for line in open(addressbook).readlines():
+      alias1match = alias1.match(line)
+      alias2match = alias2.match(line)
+      if alias1match is not None:
+         address = alias1.match(line).group(5)
+         addresses.add(address)
+      elif alias2match is not None:
+         address = alias2.match(line).group(3)
+         addresses.add(address)
+
+   return addresses
+
+
+
+#############################
+# parseMboxFolder() function
+#############################
+
+def parseMboxFolder(folder):
+
+   """
+   Parses an mbox-style mailbox on disk, extracting To, CC and BCC addresses.
+
+   This is implemented via procmail's 'formail' utility.  The 'formail' utility
+   does the header extraction, and then this function takes that output and
+   formats it for a whitelist (i.e. email addresses only).
+
+   A given line returned by formail will contain one or more email addresses,
+   separated by commas.  Email addresses will take one of three forms::
+
+      - pronovic@ieee.org
+      - Kenneth Pronovici <pronovic@ieee.org>
+      - "Kenneth J. Pronovici" <pronovic@ieee.org>
+
+   Basically, if the <> characters do not exist in an address, we can assume
+   we're in form 1.  Otheriwse we can assume we're in form 2 or 3 and adjust
+   accordingly.
+
+   We need to split the lines into individual addresses, and then extract only
+   the email portion of each line.  On first glance, it might seem like we
+   would want to just split on the "," character.  However, that won't work,
+   because we might have addresses like this::
+
+      - "Pronovici, Kenneth" <pronovic@ieee.org>
+
+   My solution is to first strip all strings enclosed in quotes, then split
+   on "," and then strip all leading and trailing whitespace, and then deal
+   with what's left.
+   
+   @param folder: Folder (mbox) on disk to operate on
+   @type folder: string, path to file on disk
+
+   @return Set of unique addresses parsed from the mbox folder
+   """
+
+   longform = re.compile("(^.*)(<)(.*)(>$)")
+   quoted = re.compile('".*"')
+
+   formail_cmd = "formail -s formail -c -z -x'To:' -x'CC:' -x'BCC' < %s" % folder
+   results = os.popen(formail_cmd, "r").readlines()
+
+   addresses = set()
+   for line in results:
+      line = quoted.sub("", line)
+      for entry in line.split(","):
+         entry = entry.strip()
+         match = longform.match(entry)
+         if match is None:
+            address = entry
+            addresses.add(address)
+         else:
+            address = match.group(3)
+            addresses.add(address)
+
+   return addresses
+
+
+##################
+# main() function
+##################
+
+def main():
+
+   """
+   Main routine for program.
+   """
+   try:
+      (whitelist, strict, lists, addressbooks, folders, exclusions) = parseOptions()
+   except Exception, e:
+      usage(e)
+      sys.exit(1)
+
+   try:
+      addresses = set()
+      for i in lists:
+         result = parseHandList(i)
+         addresses |= result
+      for i in addressbooks:
+         result = parseMuttAddressbook(i)
+         addresses |= result
+      for i in folders:
+         result = parseMboxFolder(i)
+         addresses |= result
+      for i in exclusions:
+         result = parseHandList(i)
+         addresses -= result
+      if strict:
+         open(whitelist, "w").writelines(["^"+key.replace('.', '\\.')+'$\n' for key in sorted(addresses)])
+      else:
+         open(whitelist, "w").writelines([key+'\n' for key in sorted(addresses)])
+   except Exception, e:
+      print "Error generating whitelist: %s" % e
+      sys.exit(2)
+
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+   main()
+

@@ -1,0 +1,233 @@
+#!/usr/bin/python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2001-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 1.5)
+# Project  : muttsearch
+# Package  : N/A
+# Revision : $Id: muttsearch,v 1.13 2003/09/08 20:39:40 pronovic Exp $
+# Purpose  : Implementation
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########
+# Notes
+########
+#
+# This script wraps grepmail(1) in a way that is easily called from a
+# Mutt macro.  For instance, I use:
+#
+#     macro index    S     "<shell-escape>muttsearch<enter>"
+#     macro browser  S     "<shell-escape>muttsearch<enter>"
+#     macro pager    S     "<shell-escape>muttsearch<enter>"
+#
+# To call this script.  It assumes your mail folders are in ~/mail
+# and it searches through all of your folders plus your inbox in
+# $MAIL.  It destructively writes a folder =SEARCH that will 
+# contain the search results.
+#
+# This is a Python rewrite of an earlier kshell script that was 
+# kind of a thrown-together hack.  It's my first Python script;
+# feel free to point out things I could have done differently.
+#
+
+
+###################
+# Imported modules
+###################
+
+import sys
+import os
+import tempfile
+import re
+
+
+####################
+# Defined constants
+####################
+# We use os.path.expandvars so paths are readable,
+# but are easily used in all places.
+
+MAILDIR     = os.path.expandvars('${HOME}/mail')
+FOLDER      = os.path.expandvars('%s/SEARCH' % MAILDIR)
+FOLDER_NAME = '=SEARCH'
+
+
+########################
+# user_input() function
+########################
+#
+# Gets input from user (like kshell read)
+#
+
+def user_input(prompt):
+   value = raw_input(prompt)
+   return value
+
+
+######################
+# grepmail() function
+######################
+#
+# Actually calls the system grepmail(1) function
+#
+# sys.stdout.write() is used rather than print so we don't 
+# have to print a newline each time.
+#
+
+def grepmail(pattern, args, mailboxes):
+
+   temp_file = tempfile.mktemp()
+
+   command = "grepmail -m " + args + " -e '" + pattern + "' " + mailboxes + " > " + temp_file
+
+   sys.stdout.write("\n")
+   sys.stdout.write("Working...")
+   sys.stdout.flush()
+
+   try:
+      if os.path.exists(FOLDER):
+         os.remove(FOLDER)
+   except OSError:
+      sys.stdout("Unable to remove " + FOLDER + ".")
+      return 1
+
+   try:
+      os.system(command)
+      
+      try:
+         if os.path.exists(temp_file):
+            if os.path.getsize(temp_file) == 0:
+               sys.stdout.write("no matches found.\n")
+            else:
+               os.rename(temp_file, FOLDER)
+               sys.stdout.write("results are in folder " + FOLDER_NAME + "\n")
+         else:
+            sys.stdout.write("no matches found.\n")
+
+      except OSError:
+         sys.stdout.write("no matches found.\n")
+
+   except OSError:
+         sys.stdout.write("no matches found.\n")
+
+   try:
+      os.remove(temp_file)
+   except OSError:
+      pass   # don't complain; just try to clean up
+   
+   return 0
+
+
+###############
+# Main routine
+###############
+#
+# Gets information from the user and calls grepmail()
+#
+
+def main():
+   args = "";
+   pattern = "";
+
+   print ""
+   print "============================="
+   print "Search for Data in Email"
+   print "============================="
+   print ""
+   print "You may enter Perl regular expressions, and multiple patterns"
+   print "may be separated by | as in egrep."
+   print ""
+   print "A <date> may be something like 'today', 'yesterday', '5/18/93',"
+   print "'5 days ago' or '5 weeks ago'.  The date criteria field may also"
+   print "be used in the form 'before', 'after' 'since' followed by a "
+   print "<date> OR 'between <date> and <date>'."
+   print ""
+   print "Mailboxes may also optionally be specified.  One of three forms"
+   print "can be used.  The mailbox '!' refers to your $MAIL folder.  If"
+   print "you refer to '=mailbox', this means $HOME/mail/mailbox, as in"
+   print "mutt itself.  Otherwise, specify a complete path to a mailbox."
+   print "Enter multiple mailboxes separated by spaces."
+   print "" 
+   print "See the grepmail(1) manpage for more information."
+   print ""
+   print "Just press <RETURN> to use default values for header, date and"
+   print "case-sensitivity."
+   print ""
+
+   args = "-M -m "  # initialize arguments
+
+   value = user_input("Pattern....................: ")
+   if value == "":
+      print "No pattern... exiting."
+      return 1
+   pattern = value;
+
+   value = user_input("Mailboxes..................: ")
+   if value == "":
+      mailboxes   = os.path.expandvars('%s/* $MAIL' % MAILDIR)
+   else:
+      list = ""
+      for item in re.split(" ", value):
+         if item[0] == '!':
+            list += "$MAIL "
+         elif item[0] == '=':
+            list += "%s/%s " % (MAILDIR, item[1:])
+         else:
+            list += "%s " % item
+      mailboxes = os.path.expandvars(list)
+
+   value = user_input("Header, body or all (h/b/A): ")
+   if value == "h" or value == "H":
+      args = "-h "
+   elif value == "b" or value == "B":
+      args = "-b "
+   
+   value = user_input("Case sensitive (y/N).......: ")
+   if value != "y" and value != "Y":
+      args = args + "-i "
+
+   value = user_input("Date criteria..............: ")
+   if value != "":
+      args = args + "-d '" + value + "' "
+
+   status = grepmail(pattern=pattern, args=args, mailboxes=mailboxes)
+
+   return status
+  
+
+#####################
+# Module entry point
+#####################
+#
+# Ensures that the program isn't run if someone
+# just imports this module.
+# 
+
+if __name__ == '__main__':
+   status = main()
+

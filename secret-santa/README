@@ -1,0 +1,65 @@
+# vim: set ft=text80:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Project  : Secret Santa
+# Revision : $Id: README 1289 2010-12-02 03:08:10Z pronovic $
+# Purpose  : README for package
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+A "Secret Santa" exchange is one where a group of a people get together
+and each exchange gifts with one other person from that group.  The
+exchange assignments are supposed to be secret, so that no one knows
+ahead of time who they will get their gift from.  Usually, there's a
+small ($5, $10, $15) limit on the size of the gift.  Another name for
+this type of exchange is a "grab bag" exchange.
+
+Every Secret Santa exchange has several elements:
+
+   * A group of people
+   * A "theme" for the exchange
+   * A maximum cost for each gift
+   * A date/time that the exchange will take place
+
+We sometimes place limits on the way the exchange is generated.  For
+instance, a person should not be assigned themselves as a partner, and
+we may sometimes not want to group two other particular people together
+(say, husband and wife at a big party).
+
+The secret-santa script will read a configuration file, and will then
+generate an exchange based on that file and then notify the group
+partipants of their assignment via email.
+
+To run the script, build a configuration file using the sample file
+as a starting point.  Then, run secret-santa in "test mode":
+
+   secret-santa --noemail --results secret-santa.conf
+
+If this seems to work fine (i.e. you get no errors and things seem
+to match up as expected) try generating a batch of emails to yourself:
+
+   secret-santa --orgonly --results secret-santa.conf
+
+Every email from a "real" run will be generated, but you'll get them
+all instead of mailing them to group participants.  This will allow
+you to see what the emails look like, and it will give you a chance
+to tweak your <greeting> configuration.
+
+When you're satisfied, run:
+
+   secret-santa secret-santa.conf
+
+Or, if you want to keep a copy of the assignments just in case, run:
+
+   secret-santa --results secret-santa.conf
+
+The USAGE file and the UNIX manpages contain more detailed information
+about available options.
+

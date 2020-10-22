@@ -1,0 +1,84 @@
+#!/bin/ksh
+# vim: set ft=sh:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2001-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : kshell (ksh-88)
+# Project  : Gimp graphics utilities
+# Package  : xcf2png
+# Revision : $Id: xcf2png,v 1.6 2003/09/08 20:39:40 pronovic Exp $
+# Purpose  : Uses Gimp's batch mode to convert files from XCF to PNG
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+###########################
+# Check usage and validate
+###########################
+
+if [[ $# -lt 1 || "${1}" = "--help" || "${1}" = "-h" || ! -w . ]]
+then
+   print ""
+   print "   Usage: xcf2png file1 [ file2 file3 ...]"
+   print ""
+   print "   Converts files from Gimp XCF format to PNG format"
+   print "   using Gimp's batch facility.  Assumes the directory"
+   print "   containing the XCF files is writable."
+   print ""
+   exit 1
+fi
+
+
+#########################################
+# Define the script-fu conversion script
+#########################################
+
+for i in $*
+do
+
+   xcffile=${i}
+   pngfile=${i%%.xcf}.png
+   tempfile=.${i}.$$
+
+   print -n "Converting ${xcffile}..."
+   
+   if [[ ! -r ${xcffile} ]]
+   then
+      print "skipped (not readable)."
+   elif [[ "${xcffile%%.xcf}" = ${xcffile} ]]
+   then
+      print "skipped (not an XCF file)."
+   else
+      gimp --no-interface --batch \
+           "(xcf2png \"${xcffile}\" \"${pngfile}\" \"${tempfile}\")"
+      if [[ $? -ne 0 ]]
+      then
+         print "FAILED."
+      else
+         print "done."
+      fi
+      rm -f ${tempfile}
+   fi
+   
+done

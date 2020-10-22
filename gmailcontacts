@@ -1,0 +1,385 @@
+#!/usr/bin/python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2009 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Authors  : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.5)
+# Revision : $Id: gmailcontacts 1310 2011-10-14 19:05:51Z pronovic $
+# Purpose  : Backs up gmail contacts into a Google CSV file.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Notes
+########################################################################
+
+"""
+Google specifies a CSV format for exporting contacts from your gmail account
+via the browser UI.  This is the natural way to back up your contacts, since
+you can use it to import contacts back into any gmail account.  Google also has
+a nice programmatic interface to contacts and other Google data, called gdata.
+Inexplicibly, Google does not provide a simple way to export via gdata into the
+standard contacts CSV format.  
+
+What you will find below is a quick attempt at a gdata export process that does
+generate the standard CSV format.  I reverse-engineered the format by filling
+in every possible value in a contact.  It's probably not perfect, but it seems
+to work acceptably well.
+
+Unfortunately, the backup is not complete.  Certain "contacts version 3" data
+is missing because the Python gdata library does not support that version of
+the gdata interface.  For all intents and purposes the "important" stuff is
+there, but you won't get web sites, dates, relationships, or custom fields.  I
+also discard the information about which addresses are "primary" because that
+complicates the format.
+
+To make this script work, you will need to install Google's Python gdata
+library.  On a Debian system, install the python-gdata package.  Otherwise,
+download the source package from http://code.google.com/p/gdata-python-client
+and follow the instructions to install it (there are no outside dependencies,
+so it's very easy).  I have tested with version 1.1.1 and 2.0.3.
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+"""
+
+########################################################################
+# Imported modules
+########################################################################
+
+# System modules
+import sys
+import os
+import csv
+import getopt
+from stat import S_IMODE
+from getpass import getpass
+from ConfigParser import ConfigParser
+from gdata.contacts.service import ContactsService, ContactsQuery
+
+
+########################################################################
+# Constants and configuration
+########################################################################
+
+CONFIG_FILE_PATH = os.path.join(os.environ['HOME'], ".gmailcontacts")
+
+FIELDS = [ "Name", "Given Name", "Additional Name", "Family Name", "Yomi Name",
+           "Given Name Yomi", "Additional Name Yomi", "Family Name Yomi", "Name Prefix", "Name Suffix",
+           "Initials", "Nickname", "Short Name", "Maiden Name", "Birthday",
+           "Gender", "Location", "Billing Information", "Directory Server", "Mileage",
+           "Occupation", "Hobby", "Sensitivity", "Priority", "Subject",
+           "Notes", "Group Membership", "E-mail 1 - Type", "E-mail 1 - Value", "E-mail 2 - Type",
+           "E-mail 2 - Value", "E-mail 3 - Type", "E-mail 3 - Value", "IM 1 - Type", "IM 1 - Service",
+           "IM 1 - Value", "Phone 1 - Type", "Phone 1 - Value", "Phone 2 - Type", "Phone 2 - Value",
+           "Phone 3 - Type", "Phone 3 - Value", "Phone 4 - Type", "Phone 4 - Value", "Phone 5 - Type",
+           "Phone 5 - Value", "Address 1 - Type", "Address 1 - Formatted", "Address 1 - Street",
+           "Address 1 - City", "Address 1 - PO Box", "Address 1 - Region", "Address 1 - Postal Code",
+           "Address 1 - Country", "Address 1 - Extended Address", "Address 2 - Type", "Address 2 - Formatted",
+           "Address 2 - Street", "Address 2 - City", "Address 2 - PO Box", "Address 2 - Region",
+           "Address 2 - PostalCode", "Address 2 - Country", "Address 2 - Extended Address",
+           "Organization 1 - Type", "Organization 1 - Name", "Organization 1 - Yomi Name",
+           "Organization 1 - Title", "Organization 1 - Department", "Organization 1 - Symbol",
+           "Organization 1 - Location", "Organization 1 - Job Description", "Website 1 - Type",
+           "Website 1 - Value", "Jot 1 - Type", "Jot 1 - Value", "Jot 2 - Type", "Jot 2 - Value", ]
+
+
+########################################################################
+# Utility functions
+########################################################################
+
+def usage():
+   """
+   Prints out program usage information.
+   """
+   sys.stderr.write("\n")
+   sys.stderr.write("Usage: %s [--output=file.csv]\n" % os.path.basename(sys.argv[0]))
+   sys.stderr.write("\n")
+   sys.stderr.write("This program dumps gmail contacts information to a Google CSV file.\n")
+   sys.stderr.write("The CSV file will contain all of the \"trusted\" contacts, which are\n");
+   sys.stderr.write("ones shown in \"My Contacts\" in the UI).\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Output is sent to stdout by default, or you can use the --output switch\n")
+   sys.stderr.write("to specify a named output file.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Configuration is taken from $HOME/.gmailcontacts.  Since this file\n")
+   sys.stderr.write("may contain sensitive login information, it must have mode 400.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Here is a sample configuration file:\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("   [GmailLogin]\n")
+   sys.stderr.write("   user=user@gmail.com\n")
+   sys.stderr.write("   password=somethingsafe\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("If the login information is not available, you will be prompted for\n")
+   sys.stderr.write("it interactively.\n")
+
+def getLoginInfo():
+   """
+   Gets login information.
+
+   If the config file exists, the information is taken from there.  This is a
+   simple file INI-style file parsed by Python's ConfigParser class.
+
+      [GmailLogin]
+      user=user@google.com
+      password=somethingsafe
+
+   If the config file does not exist, the user is prompted to enter login
+   information on stdin.
+
+   If config file does exist, but has a mode other than 400, then a warning
+   will be displayed and the file will not be used.
+   """ 
+   if os.path.exists(CONFIG_FILE_PATH):
+      if S_IMODE(os.stat(CONFIG_FILE_PATH).st_mode) != 0400:
+         raise Exception("Config file [%s] exists, but does not have mode 400." % CONFIG_FILE_PATH)
+      config = ConfigParser()
+      config.read(CONFIG_FILE_PATH)
+      try:
+         user = config.get("GmailLogin", "user")
+         password = config.get("GmailLogin", "password")
+      except:
+         user = raw_input("Gmail login (xxxx@gmail.com): ")
+         password = getpass("Password: ")
+   else:
+      user = raw_input("Gmail login (xxxx@gmail.com): ")
+      password = getpass("Password: ")
+   return (user, password)
+
+def generateSpreadsheet(user, password, file):
+   """
+   Generate contacts spreadsheet based on gmail contacts.
+   
+   Retrieves all of the contacts that are a part of "My Contacts"
+   and dumps them to a CSV writer.  The CSV writer will be hooked
+   up to the passed-in file (which can be something like sys.stdout).
+
+   @param user        User to log in as
+   @param password    Password to use to log in
+   @param file        File object to use with the CSV writer
+   """
+   csv_writer = csv.DictWriter(file, delimiter=',', fieldnames=FIELDS)
+   csv_writer.writerow(dict(zip(FIELDS, FIELDS)))
+
+   client = ContactsService(additional_headers={"GData-Version":"2"})
+   client.ClientLogin(user, password)
+
+   groups = { }
+   feed = client.GetGroupsFeed()
+   for group in feed.entry:
+      key = group.id.text
+      groups[key] = group
+
+   for group in groups.values():
+      if group.content.text == "System Group: My Contacts":
+         query = ContactsQuery()
+         query.max_results = 9999   # large enough that we'll get "everything"
+         query.group = group.id.text
+         feed = client.GetContactsFeed(query.ToUri())
+         for contact in feed.entry:
+            values = { }
+            values.update(parseGroups(contact, groups))
+            values.update(parseTitle(contact))
+            values.update(parseEmail(contact))
+            values.update(parseIM(contact))
+            values.update(parsePhone(contact))
+            values.update(parseAddress(contact))
+            csv_writer.writerow(values)
+
+def parseGroups(contact, groups):
+   """
+   Parse groups information out of a contact.
+   @param contact  Contact to parse
+   @param groups   Map from group id (href) to group object
+   @returns: Dictionary containing group fields
+   """
+   values = { }
+   values["Group Membership"] = None
+   if contact.group_membership_info is not None:
+      for element in contact.group_membership_info:
+         key = element.href
+         group = groups[key]
+         if group.content.text is not None:
+            name = group.content.text.replace("System Group: ", "* ")
+            if values["Group Membership"] is None:
+               values["Group Membership"] = name
+            else:
+               values["Group Membership"] += " ::: "
+               values["Group Membership"] += name
+   return values
+
+def parseTitle(contact):
+   """
+   Parse title and name information out of a contact.
+   @param contact  Contact to parse
+   @returns: Dictionary containing title and name fields
+   """
+   values = { }
+   if contact.title is not None:
+      values["Name"] = contact.title.text
+   if contact.content is not None:
+      values["Notes"] = contact.content.text
+   if contact.organization is not None:
+      if contact.organization.org_name is not None:
+         values["Organization 1 - Name"] = contact.organization.org_name.text
+      if contact.organization.org_title is not None:
+         values["Organization 1 - Title"] = contact.organization.org_title.text
+   return values
+
+def parseEmail(contact):
+   """
+   Parse email information out of a contact.
+   @param contact  Contact to parse
+   @returns: Dictionary containing email fields
+   """
+   values = { }
+   if contact.email is not None:
+      records = { }
+      for element in contact.email:
+         type = element.rel.split("#")[1].title()
+         value = element.address
+         if not records.has_key(type):
+            records[type] = []
+         records[type].append(value)
+      index = 0
+      for type in records.keys():
+         index += 1
+         value = records[type][0]
+         for address in records[type][1:]:
+            value += " ::: "
+            value += address
+         values["E-mail %d - Type" % index] = type
+         values["E-mail %d - Value" % index] = value
+   return values
+
+def parseIM(contact):
+   """
+   Parse IM information out of a contact.
+   @param contact  Contact to parse
+   @returns: Dictionary containing IM fields
+   """
+   values = { }
+   if contact.im is not None:
+      index = 0
+      for element in contact.im:
+         index += 1
+         service = element.protocol.split("#")[1].title().replace("_", " ")
+         value = element.address
+         if index == 1:
+            values["IM 1 - Type"] = "Other"
+            values["IM 1 - Service"] = service
+            values["IM 1 - Value"] = value
+         else:
+            values["IM 1 - Service"] += " ::: " + service
+            values["IM 1 - Value"] += " ::: " + value
+   return values
+
+def parsePhone(contact):
+   """
+   Parse phone number information out of a contact.
+   @param contact  Contact to parse
+   @returns: Dictionary containing phone number fields
+   """
+   values = { }
+   if contact.phone_number is not None:
+      records = { }
+      for element in contact.phone_number:
+         type = element.rel.split("#")[1].title()
+         value = element.text
+         if not records.has_key(type):
+            records[type] = []
+         records[type].append(value)
+      index = 0
+      for type in records.keys():
+         index += 1
+         value = records[type][0]
+         for address in records[type][1:]:
+            value += " ::: "
+            value += address
+         values["Phone %d - Type" % index] = type
+         values["Phone %d - Value" % index] = value
+   return values
+
+def parseAddress(contact):
+   """
+   Parse mailing address information out of a contact.
+   @param contact  Contact to parse
+   @returns: Dictionary containing mailing address fields
+   """
+   values = { }
+   if contact.postal_address is not None:
+      records = { }
+      for element in contact.postal_address:
+         type = element.rel.split("#")[1].title()
+         value = element.text
+         if not records.has_key(type):
+            records[type] = []
+         records[type].append(value)
+      index = 0
+      for type in records.keys():
+         index += 1
+         value = records[type][0]
+         for address in records[type][1:]:
+            value += " ::: "
+            value += address
+         values["Address %d - Type" % index] = type
+         values["Address %d - Formatted" % index] = value
+   return values
+
+
+########################################################################
+# Main routine
+########################################################################
+
+def main():
+   """
+   Main routine for program.
+   """
+   switches = { }
+   opts, actions = getopt.getopt(sys.argv[1:], "ho:", [ "help", "output=", ])
+   for o,a in opts:  # push the switches into a hash
+      switches[o] = a
+   if switches.has_key("-h") or switches.has_key("--help"):
+      usage()
+      sys.exit(1)
+   if switches.has_key("-o"): 
+      file = open(switches["-o"], "wb")
+   elif switches.has_key("--output"):
+      file = open(switches["--output"], "wb")
+   else:
+      file = sys.stdout
+   (user, password) = getLoginInfo()
+   generateSpreadsheet(user, password, file)
+
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+   main()
+

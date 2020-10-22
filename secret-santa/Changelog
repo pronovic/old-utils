@@ -1,0 +1,35 @@
+Version 1.5    01 Dec 2010
+
+	* First time looking at this in a while.
+	* Run pylint on code and fix warnings.
+	* Standardize the headers, clean up comments, etc.
+
+Version 1.3    07 Dec 2005
+
+	* Add -c,--autoconflict option to script (closes: #14).
+	* Modify secret-santa.1 manpage to document new option.
+	* Modify secret-santa.1 to remove references to Cedar Solutions, Inc.
+	* Modify secret-santa.conf.5 to remove references to Cedar Solutions, Inc.
+	* Remove README.Developers from Python source distribution.
+	* Clean up developer-private makefile.
+	* Convert Changelog to match Vim syntax format.
+
+Version 1.2    08 Sep 2003
+
+	* Converted file headers to new Cedar Solutions standard.
+	* Added email address to all files where author is listed.
+	* Removed all references to Cedar Solutions, Inc.
+	* Added encoding to top of all Python files.
+	* Did cleanup of some of the private maintainer scripts.
+
+Version 1.1    10 Dec 2002
+
+	* Documentation now mentions requirement on an MTA such as sendmail or exim.
+	* Added file README.Developers
+
+Version 1.0    09 Dec 2002
+
+	* Initial "public" release.
+
+-----------------------------------------------------------------------------
+vim: set ft=changelog noexpandtab:

@@ -1,0 +1,528 @@
+#!/usr/bin/perl
+# vim: set ft=perl:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2001-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Perl 5
+# Project  : rcsinfo
+# Package  : N/A
+# Revision : $Id: rcsinfo,v 1.9 2003/09/08 20:39:40 pronovic Exp $
+# Purpose  : Implementation
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########
+# Notes
+########
+
+#
+# This script provides a listing of what files in a directory are checked
+# out of RCS, to whom and at what revision number.  It's based in theory
+# on an ugly little awk script I once used at a former employer.
+#
+# Yeah, RCS is kind of going out of favor now that it's just a cog in the 
+# big wheel of CVS, but I like using it at work for small things (since then 
+# I don't have to install CVS just for my own use).  
+#
+# The information that the script prints is taken from the RCS rlog command.
+# We call 'rlog -L -h RCS/*,v' and get something like this:
+#
+#     RCS file: RCS/usage.c,v
+#     Working file: usage.c
+#     head: 1.1
+#     branch:
+#     locks: strict
+#              pronovic: 1.1
+#     access list:
+#     symbolic names:
+#     keyword substitution: kv
+#     total revisions: 1
+#     =============================================================================
+# 
+# The 'Working file:' line indicates that we've started a new file.  The 
+# 'locks:' line lists the locks that the file has.  In the example above, 
+# 'pronovic' is the user that owns the lock, and the revision is "1.1".  
+# There can be more than one file in the listing, and there can also be more 
+# than one lock for a file (although you don't see that done very often).
+#
+# If the rlog command doesn't exist, the script will bomb.
+#
+# This is a second-generation version of this script.  It adds some additional 
+# options (-u, -f) and also makes sure that the output is pretty by aligning 
+# it all (otherwise, if you have mixed short and long filenames, it gets pretty 
+# hard to read).  Yeah, it's big now that I rewrote it.  Sorry, I was bored.
+#
+# The script executes in two steps, to facilitate making the output pretty.  
+# First, we get parse the rlog output, and then we display it properly.  More 
+# details below.
+#
+
+
+################
+# Package setup
+################
+
+use Getopt::Long;
+use strict vars;
+
+
+#################
+# Constant setup
+#################
+
+my $set         = 1;
+my $unset       = 0;
+my $blank       = "";
+
+
+###################
+# Global variables
+###################
+
+# Command-line interface variables
+my $help       = $unset;
+my $file_only  = $unset;
+my $user_limit = $blank;
+my $return     = -1;
+
+# Global variables used to pass data back and forth
+my %file_list;
+
+# Rlog command definition variables
+my $rlog         = $blank;
+my $rcs_files    = $blank;
+my $rlog_command = $blank;
+
+
+#############################
+# Set up the warning handler
+#############################
+# Perl-intrinsic warnings can be supressed by setting 
+# $disable_warnings="TRUE".
+
+my $disable_warnings = "FALSE";
+BEGIN { $SIG{'__WARN__'} = sub { warn $_[0] if($disable_warnings ne "TRUE") } } 
+
+
+################################
+# Handle command-line arguments
+################################
+
+$return = GetOptions("f"    => \$file_only, 
+                     "u=s"  => \$user_limit,
+                     "help" => \$help);
+   
+if($return == 0)
+{
+   usage();
+   exit 1;
+}
+
+if($help == $set)
+{
+   usage();
+   exit 0;
+}
+
+
+#######################################
+# Build the rlog command for later use
+#######################################
+# We disable warnings here because glob prints warnings whenever it can't 
+# find files matching the pattern we're globbing, ugh.
+
+$disable_warnings = "TRUE";
+
+$rlog = `which rlog`;     # Hmm... might not be portable?  Oh, well.
+chop $rlog;
+if(length($rlog) == 0)
+{
+   die "Unable to find rlog command.\n";
+}
+
+$rcs_files="RCS/*,v";
+if (!defined glob($rcs_files))
+{
+   $rcs_files="./*,v";
+   if(!defined glob($rcs_files))
+   {
+      die "Unable to find sensible RCS files (RCS/*,v or *,v) to check.\n";
+   }
+}
+
+$rlog_command="$rlog -L -h $rcs_files";
+
+$disable_warnings = "FALSE";
+
+
+######################
+# Process the results
+######################
+
+build_list();
+display_list();
+
+exit 0;
+
+
+##########################
+# build_list() subroutine
+##########################
+#
+# The list is built using a state machine to process the output
+# from rlog (it really is easier to follow this way, believe it or
+# not).  The state transition looks like this:
+#
+#      SEARCHING     -> FOUND_FILE
+#      FOUND_FILE    -> FOUND_LOCKS or SEARCHING
+#      FOUND_LOCKS   -> FILE_COMPLETE
+#      FILE_COMPLETE -> SEARCHING
+#      <ANY>         -> DONE
+#
+# Each state reads as many lines as it needs to in order to move to
+# another state (either in a normal progression or to the DONE state
+# if the end of input is reached).
+#
+# The result of this function call is that the global %file_list hash is 
+# filled in, with one entry per file, and then the $file_list{'users'}
+# and $file_list{'locks'} entries are filled in as arrays of user and 
+# lock values (those values are always paired, so this is safe).
+#
+
+sub build_list()
+{
+
+   ############
+   # Variables
+   ############
+
+   my $file;
+   my @users;
+   my @revisions;
+
+   my $rlog_line;
+   my @rlog_results;
+
+
+   #######################
+   # Get the rlog results
+   #######################
+
+   @rlog_results = `$rlog_command`;
+
+
+   ###########################
+   # Process the rlog results
+   ###########################
+
+   my $state = "SEARCHING";
+
+   STATE_MACHINE: while(1)
+   {
+      if($state eq "SEARCHING")
+      {
+
+         ################## 
+         # SEARCHING state
+         ##################
+
+         SEARCHING: while(1)
+         {
+            $rlog_line = shift @rlog_results;
+            if(!defined $rlog_line)
+            {
+               $state = "DONE";
+               last SEARCHING;
+            }
+            else
+            {
+               chop $rlog_line;
+               if($rlog_line =~ /^Working file:/)
+               {
+                  $state = "FOUND_FILE";
+                  last SEARCHING;
+               }
+            }
+         }
+      }
+      elsif($state eq "FOUND_FILE")
+      {
+
+         ###################
+         # FOUND_FILE state
+         ###################
+
+         # Reset these... each time we enter this state, 
+         # we'll have a new file with new users and locks.
+         undef $file;
+         undef @users;
+         undef @revisions;
+
+         $rlog_line =~ /(Working file: )(.*$)/;
+         $file = ${2};
+
+         FOUND_FILE: while(1)
+         {
+            $rlog_line = shift @rlog_results;
+            if(!defined $rlog_line)
+            {
+               $state = "DONE";
+               last FOUND_FILE;
+            }
+            else
+            {
+               chop $rlog_line;
+               if($rlog_line =~ /^locks:/)
+               {
+                  $state = "FOUND_LOCKS";
+                  last FOUND_FILE;
+               }
+               elsif($rlog_line =~ /^access list:/)
+               {
+                  $state = "SEARCHING";
+                  last FOUND_FILE;
+               }
+            }
+         }
+      }
+      elsif($state eq "FOUND_LOCKS")
+      {
+
+         ####################
+         # FOUND_LOCKS state
+         ####################
+
+         FOUND_LOCKS: while(1)
+         {
+            $rlog_line = shift @rlog_results;
+            if(!defined $rlog_line)
+            {
+               $state = "DONE";
+               last FOUND_LOCKS;
+            }
+            else
+            {
+               if($rlog_line =~ /^access list:/)
+               {
+                  $state = "FILE_COMPLETE";
+                  last FOUND_LOCKS;
+               }
+               else
+               {
+                  $rlog_line =~ /([ \t]*)(.*?)(:)(.*$)/;
+                  push @users, ${2};
+                  push @revisions, ${4};
+               }
+            }
+         }
+      }
+      elsif($state eq "FILE_COMPLETE")
+      {
+
+         ######################
+         # FILE_COMPLETE state
+         ######################
+
+         push @{ $file_list{$file}{'users'}}, @users;
+         push @{ $file_list{$file}{'revisions'}}, @revisions;
+
+         $state = "SEARCHING";
+
+      }
+      elsif($state eq "DONE")
+      {
+
+         #############
+         # DONE state
+         #############
+
+         last STATE_MACHINE;
+      }
+   }
+}
+
+
+############################
+# display_list() subroutine
+############################
+# 
+# There are actually a couple of forms for the display.  In the first
+# (traditional?) form, we display:
+#
+#        file     user     revision
+#
+# In the modified (file-only) form, we just display the file.  To complicate
+# things, the usage allows that the display be restricted by user, i.e. only
+# the files that a particular user has locked will be displayed (but all of
+# the locks for those files will be displayed, not just the user's locks).
+#
+# This gets done in two passes.  First, we determine which files to display
+# (we potentially remove unneeded files from our hash).  Then, we display each 
+# of those files and take into account the traditional or file-modified output 
+# form.
+#
+# If the traditional form has been chosen, we also have to take an extra step
+# to determine appropriate field widths, because we'd like all of the columns 
+# to line up.  We make the columns line up using printf(), by specifying a 
+# space-padded string width that's as long as the longest value in each column.
+#
+
+sub display_list()
+{
+
+   ############
+   # Variables
+   ############
+
+   my $file;
+   my $user;
+   my $revision;
+
+   my $found = "FALSE";
+   
+   my $file_field_width = 0;
+   my $user_field_width = 0;
+
+
+   ############################################
+   # Modify the hash of filenames, if required
+   ############################################
+
+   if(length($user_limit) > 0)
+   {
+      foreach $file (keys %file_list)
+      {
+         $found = "FALSE";
+         SEARCH: foreach $user (@{$file_list{$file}{'users'}})
+         {
+            if($user_limit eq $user)
+            {
+               $found = "TRUE";  
+               last SEARCH;
+            }
+         }
+
+         if($found eq "FALSE")
+         {
+            delete $file_list{$file};
+         }
+      }
+   }
+
+
+   ########################################################
+   # Determine the file and user field widths, if required
+   ########################################################
+
+   if($file_only != $set)
+   {
+      foreach $file (sort keys %file_list)
+      {
+         if(length($file) > $file_field_width)
+         {
+            $file_field_width = length($file);
+         }
+      
+         foreach $user (@{$file_list{$file}{'users'}})
+         {
+            if(length($user) > $user_field_width)
+            {
+               $user_field_width = length($user);
+            }
+         }
+      }
+   }
+
+      
+   ###############################
+   # Finally, display the results
+   ###############################
+
+   foreach $file (sort keys %file_list)
+   {
+
+      $user = shift @{$file_list{$file}{'users'}};
+      $revision = shift @{$file_list{$file}{'revisions'}};
+
+      if($file_only != $set)
+      {
+         printf("%-*.*s   %-*.*s   %s\n", 
+                $file_field_width, $file_field_width, $file,
+                $user_field_width, $user_field_width, $user,
+                $revision);
+      }
+      else
+      {
+         printf("$file\n");
+      }
+
+      if($file_only != $set)
+      {
+         REMAINDER: while(1)
+         {
+            $user = shift @{$file_list{$file}{'users'}};
+            $revision = shift @{$file_list{$file}{'revisions'}};
+
+            if(!defined $user or !defined $revision)
+            {
+               last REMAINDER;
+            }
+
+            printf("%-*.*s   %-*.*s   %s\n", 
+                   $file_field_width, $file_field_width, "",
+                   $user_field_width, $user_field_width, $user,
+                   $revision);
+         }
+      }
+   }
+}
+
+
+###################
+# Usage subroutine
+###################
+
+sub usage()
+{
+   print "\n";
+   print "Usage: rcsinfo [-u user] [--help]\n";
+   print "\n";
+   print "\t-u user     Display only files checked out by user.\n";
+   print "\t-f          Only print filename, not user or revision.\n";
+   print "\t--help      Display this help message.\n";
+   print "\n";
+   print "Displays a summarized listing of the files checked out to RCS\n";
+   print "in the current directory.  If -f is used, only the filenames are\n";
+   print "shown; otherwise, each file is shown along with the users that\n";
+   print "have the it checked out, and the revision that each user has\n";
+   print "locked.\n";
+   print "\n";
+   print "This program is copyright (c) 2001 Kenneth J. Pronovici and\n";
+   print "is distributed under the GNU GPL; see http://www.gnu.org/\n";
+   print "for more information.\n";  
+   exit 0;
+}    
+
+

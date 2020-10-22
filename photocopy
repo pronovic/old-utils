@@ -1,0 +1,105 @@
+#!/bin/ksh
+# vim: set ft=sh:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2008-2009,2011 Kenneth J. Pronovici
+# All rights reserved.
+# 
+# Permission to use, copy, modify, and/or distribute this software 
+# for any purpose with or without fee is hereby granted, provided 
+# that the above copyright notice and this permission notice appear 
+# in all copies.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Revision : $Id: photocopy 1303 2011-03-19 21:51:26Z pronovic $
+# Purpose  : Use SANE to make a greyscale photocopy.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########
+# Notes
+########
+
+#
+# Setup notes:
+#
+#  * Implemented an tested on a Debian 'etch' system; also works on 'lenny' and 'squeeze'
+#  * You need sane-utils and libtiff-tools installed
+#  * Find your scanner using sane-find-scanner and scanimage -L
+#  * Scanner configuration is in /etc/sane.d/<manufacturer>
+#  * It does not work to pipe all of these commands together, for some reason
+#
+# Hints:
+#
+#  * Make sure your user is in the scanners group
+#  * It may be possible to exclude the --device switch if your default scanner works
+#  * BUT if your scanner gets recognized in more than one way, you must list it explicitly
+#
+# My personal script previously used explicit device "epkowa:libusb:002:007",
+# an Epson Perfection 1650.  I was unable to rely on the default device.
+# Currently (as of March of 2011), the default device seems to work properly
+# again, so I've removed the --device switch.  If you have one device but its
+# name keeps changing, you could try using the $DEVICE variable that I've set
+# up below.
+#
+# I previously used the --quick-format=Letter switch.  However, that option
+# seems to have disappeared in my current version of the tool (1.0.21).
+# Everything seems to work without it, so I guess this doesn't matter.
+
+# Configured commands
+#DEVICE=$(scanimage -L | head -1 | sed 's/^device `//' | sed 's/. is a.*$//')
+#SCAN="scanimage --progress --device=epkowa:libusb:002:007 --format=tiff --mode=Gray --resolution=300"
+#SCAN="scanimage --progress --device=$DEVICE --format=tiff --mode=Gray --resolution=300"
+SCAN="scanimage --progress --format=tiff --mode=Gray --resolution=300"
+CONVERT="tiff2ps -z -h11 -w8.5"
+PRINT="lp -d samsung"
+
+# Temporary files
+TIFF_FILE=/tmp/copy.$$.tiff
+PS_FILE=/tmp/copy.$$.ps
+
+# Print a starting
+print "Photocopy starting."
+
+# Scan whatever is sitting in the scanner, to a TIFF file
+print "Scanning..."
+${SCAN} > ${TIFF_FILE}
+if [[ $? != 0 ]]
+then
+   print "Error scanning document."
+   exit 1
+fi
+
+# Convert the TIFF file to a Postscript file
+print "Converting..."
+${CONVERT} ${TIFF_FILE} > ${PS_FILE}
+if [[ $? != 0 ]]
+then
+   print "Error converting document."
+   rm -f ${TIFF_FILE}
+   exit 1
+fi
+
+# Print the Postscript file
+print "Printing..."
+${PRINT} ${PS_FILE}
+
+# Clean up
+print "Cleaning up..."
+rm -f ${TIFF_FILE} ${PS_FILE}
+
+# Print a finishing message
+print "Photocopy finished."
+

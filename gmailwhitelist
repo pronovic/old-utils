@@ -1,0 +1,212 @@
+#!/usr/bin/python
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2006-2007,2009 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Authors  : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.5)
+# Revision : $Id: gmailwhitelist 1369 2014-04-02 13:47:35Z pronovic $
+# Purpose  : Generates a whitelist using gmail as a source
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########################################################################
+# Notes
+########################################################################
+
+"""
+This program generates an email address whitelist based on gmail data, suitable
+for use with the Cedar Solutions whitelist script.
+
+Currently, the gmail whitelist will contain all of your "trusted" gmail
+contacts (the ones shown in "My Contacts" in the UI).  
+
+Previously, this script also used to grab information from the sent mail
+folder, adding recent sent addresses to the whitelist.  Unfortunately, this
+behavior broke when libgmail stopped working, and I haven't found the time to
+rewrite it using some other mechanism.
+
+To make this script work, you will need to install Google's Python gdata
+library.  On a Debian system, install the python-gdata package.  Otherwise,
+download the source package from http://code.google.com/p/gdata-python-client
+and follow the instructions to install it (there are no outside dependencies,
+so it's very easy).  Most recently, I have tested with version 2.0.18.
+
+@author: Kenneth J. Pronovici <pronovic@ieee.org>
+"""
+
+########################################################################
+# Imported modules
+########################################################################
+
+# System modules
+import sys
+import os
+from datetime import datetime
+from stat import S_IMODE
+from getpass import getpass
+from ConfigParser import ConfigParser
+from gdata.contacts.service import ContactsService, ContactsQuery
+
+
+########################################################################
+# Constants and configuration
+########################################################################
+
+CONFIG_FILE_PATH = os.path.join(os.environ['HOME'], ".gmailwhitelist")
+
+
+#######################################################################
+# Functions
+#######################################################################
+
+def usage():
+   """
+   Prints out program usage information.
+   """
+   sys.stderr.write("\n")
+   sys.stderr.write("Usage: %s \n" % os.path.basename(sys.argv[0]))
+   sys.stderr.write("\n")
+   sys.stderr.write("This program generates an email address whitelist (suitable for use\n")
+   sys.stderr.write("with the Cedar Solutions whitelist script) based on gmail data.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Currently, the gmail whitelist will contain all of your \"trusted\" gmail\n")
+   sys.stderr.write("contacts (the ones shown in \"My Contacts\" in the UI).\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Output is always sent to stdout.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Configuration is taken from $HOME/.gmailwhitelist.  Since this file\n")
+   sys.stderr.write("may contain sensitive login information, it must have mode 400.\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("Here is a sample configuration file:\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("   [GmailLogin]\n")
+   sys.stderr.write("   user=user@gmail.com\n")
+   sys.stderr.write("   password=somethingsafe\n")
+   sys.stderr.write("\n")
+   sys.stderr.write("If the login information is not available, you will be prompted for\n")
+   sys.stderr.write("it interactively.\n")
+
+def getLoginInfo():
+   """
+   Gets login information.
+      
+   If the config file exists, the information is taken from there.  This is a
+   simple file INI-style file parsed by Python's ConfigParser class. 
+
+      [GmailLogin]
+      user=user@google.com
+      password=somethingsafe
+
+   If the config file does not exist, the user is prompted to enter login
+   information on stdin.
+
+   If config file does exist, but has a mode other than 400, then a warning
+   will be displayed and the file will not be used.
+   """
+   if os.path.exists(CONFIG_FILE_PATH):
+      if S_IMODE(os.stat(CONFIG_FILE_PATH).st_mode) != 0400:
+         raise Exception("Config file [%s] exists, but does not have mode 400." % CONFIG_FILE_PATH)
+      config = ConfigParser()
+      config.read(CONFIG_FILE_PATH)
+      try:
+         user = config.get("GmailLogin", "user")
+         password = config.get("GmailLogin", "password")
+      except:
+         user = raw_input("Gmail login (xxxx@gmail.com): ")
+         password = getpass("Password: ")
+   else:
+      user = raw_input("Gmail login (xxxx@gmail.com): ")
+      password = getpass("Password: ")
+   return (user, password)
+
+def getContactAddresses(user, password):
+   """
+   Gets contact email addresses from gmail.
+
+   This loops through all of the contacts.  For each contact, if the contact
+   has an email address, then that email address is added to the list.
+
+   @param user        User to log in as
+   @param password    Password to use to log in
+
+   @return Set of unique email addresses among contacts.
+   """
+   addresses = set()
+   client = ContactsService(additional_headers={"GData-Version":"2"})
+   client.ssl = True
+   client.ClientLogin(user, password)
+   groups = client.GetGroupsFeed()
+   for group in groups.entry:
+      if group.content.text == "System Group: My Contacts":
+         query = ContactsQuery()
+         query.max_results = 9999   # large enough that we'll get "everything"
+         query.group = group.id.text
+         contacts = client.GetContactsFeed(query.ToUri())
+         for contact in contacts.entry:
+            for email in contact.email:
+               addresses.add(email.address.lower())
+         break
+   return addresses
+
+def dumpAddresses(user, addresses):
+   """
+   Dumps addresses to stdout in a form usable by the whitelist program.
+   @param user        User that addresses are for (for reference)
+   @param addresses   Addresses to dump
+   """
+   print "# Whitelist email entries for %s" % user
+   print "# Auto-generated by gmailwhitelist at %s" % datetime.today().ctime()
+   for address in sorted(addresses):
+      print "%s" % address
+
+
+########################################################################
+# Main routine
+########################################################################
+
+def main():
+   """
+   Main routine for program.
+   """
+   if len(sys.argv) > 1:
+      usage()
+      sys.exit(1)
+   try:
+      (user, password) = getLoginInfo()
+      addresses = getContactAddresses(user, password)
+      dumpAddresses(user, addresses)
+   except Exception, e:
+      sys.stderr.write("Error generating whitelist: %s" % e)
+
+
+########################################################################
+# Module entry point
+########################################################################
+
+# Run the main routine if the module is executed rather than sourced
+if __name__ == '__main__':
+   main()
+

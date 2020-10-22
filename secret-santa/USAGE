@@ -1,0 +1,172 @@
+# vim: set ft=text80:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Project  : Secret Santa
+# Revision : $Id: USAGE 1289 2010-12-02 03:08:10Z pronovic $
+# Purpose  : USAGE for package
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# This file was created with a width of 80 characters, and NO tabs.
+
+USAGE
+
+secret-santa [options] config-file
+
+
+OPTIONS
+
+-h, --help
+Display usage/help listing.
+
+-V, --version
+Display version information.
+
+-a, --attempts
+Number of attempts to take.  For some configurations, it may be
+difficult to find a valid exchange in a single attempt.  By default, up
+to 10 attempts will be made.
+
+-r, --results
+Dump results to standard output.  This option is useful for testing
+along with the --noemail option, or in order to keep a list of
+assignments, in case a participant were to lose his or her email.
+
+-o, --orgonly
+Generate email to organizer only.  This option is useful for testing, in
+order to see what emails to participants will look like.
+
+-n, --noemail
+Do not send any emails.
+
+
+CONFIGURATION
+
+The configuration file provided to secret-santa does not have to be
+named secret-santa.conf, but must match the format described
+below.  The secret-santa configuration file is written in XML, and an
+example file can be found with the secret-santa source code.  This
+manpage documents the file format and parameters for reference purposes.
+
+The main configuration section, <secret-santa>, contains two other sections:
+
+ <exchange>    General exchange configuration
+ <group>       Information describing the exchange group
+
+The <exchange> section contains exactly six elements:
+
+ <name>        The name of the exchange
+ <organizer>   Details about the organizer
+ <date-time>   The date/time of the exchange
+ <theme>       The theme of the exchange
+ <cost>        The suggested cost of a gift
+ <greeting>    Free-form comments for the email
+
+All fields except <organizer> are free-form text.  The
+<organizer> field contains three other fields:
+
+ <name>        The name of the organizer
+ <email>       Organizer's email address
+ <phone>       Organizer's phone number
+
+This is an example <exchange> section:
+
+ <exchange>
+  <name>Sample Exchange</name>
+  <organizer>
+   <name>Sample Organizer</name>
+   <email>test@dummy.org</email>
+   <phone>612.555.1212</phone>
+  </organizer>
+  <date-time>Christmas Day, 2002 (time TBD)</date-time>
+  <theme>Free Software</theme>
+  <cost>$0-$0</cost>
+  <greeting>
+Hello!  This exchange is a test exchange, that shouldn't
+really be used for anything.  You would put the real greeting
+that you'd like at the top of the email into this field.
+  </greeting>
+ </exchange>
+
+The <group> section contains one or more <person> sections.
+Each person section contains the following fields:
+
+ <id>          A unique identifer for this person
+ <name>        Full name 
+ <nickname>    Nickname
+ <email>       Email address
+ <conflicts>   Any conflicts, identified by id
+
+The <id> just has to be unique.  You can use numbers (simple)
+or if there are no duplicates, first name or last name, etc.
+There is no check to ensure that ids are actually unique, so
+be careful!
+
+The <conflicts> field contains a list of IDs that this person
+should not have assigned as their buddy.  If there are no conflicts,
+just list an empty tag, i.e. <conflicts/>.
+
+Here is an example person with no conflicts:
+
+ <person>
+  <id>3</id>
+  <name>Person Three</name>
+  <nickname>Three</nickname>
+  <email>three@dummy.org</email>
+  <conflicts/>
+ </person>
+
+Here is an example person with two conflicts:
+
+ <person>
+  <id>4</id>
+  <name>Person Four</name>
+  <nickname>Four</nickname>
+  <email>four@dummy.org</email>
+  <conflicts>
+   <id>1</id>
+   <id>2</id>
+  </conflicts>
+ </person>
+
+Be careful when assigning conflicts!  You need to leave some
+possibilities open, and if you assign too many conflicts, there
+may just not be any way to generate a valid exchange and still
+satisfy those conflicts.
+
+
+NOTES
+
+It's possible that for a given pass, we might not be able to build a
+valid exchange.  This might happen, for instance, if we get to the point
+where the only people left to be assigned all conflict with the person 
+we're trying to make an assignment for.
+
+Since we're generating assigments pseudo-randomly, this isn't a
+permanent failure.  We'll just try again (up to 10 times) to see if we
+can make it work.  If it still doesn't work, there are you potential
+fixes: either modify configuration (to change conflicts) or increase the
+number of attempts (which might make a difference for larger groups).
+
+
+BUGS
+
+There probably are bugs in this code.  I whipped it together pretty
+quickly.  However, it seems to work fine.  If you find a bug, please
+report it.  If possible, give me all error messages that the script
+printed, and provide the output that the script gives when run with 
+the --orgonly and --report options enabled.
+
+I would eventually like to add support for reply-to addresses and
+few other things, but given how often I use the script, I don't think
+I'll get around to it.  Patches accepted. 
+
+Report bugs to <support@cedar-solutions.com>.
+

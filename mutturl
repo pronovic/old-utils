@@ -1,0 +1,212 @@
+#!/usr/bin/python2.1
+# -*- coding: iso-8859-1 -*-
+# vim: set ft=python ts=3 sw=3 expandtab:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2001-2003 Kenneth J. Pronovici.
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License,
+# Version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Copies of the GNU General Public License are available from
+# the Free Software Foundation website, http://www.gnu.org/.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Language : Python (>= 2.0)
+# Project  : mutturl
+# Package  : N/A
+# Revision : $Id: mutturl,v 1.7 2003/09/08 20:39:40 pronovic Exp $
+# Purpose  : Implementation
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########
+# Notes
+########
+#
+# This script provides a target for urlview(1).  Use:
+#
+#     COMMAND mutturl '%s'
+# 
+# in your ~/.urlview, and it will help you decide how to view 
+# the URLs that urlview comes up with.
+#
+
+###################
+# Imported modules
+###################
+
+import sys
+import os
+import string
+
+
+####################
+# Potential viewers
+####################
+
+X_BROWSERS = ( 'mozilla', 'netscape', 'konqueror', 'opera' )
+T_BROWSERS = ( 'w3m', 'links', 'lynx' )
+
+
+########################
+# user_input() function
+########################
+#
+# Gets input from user (like kshell read)
+#
+
+def user_input(prompt):
+   value = raw_input(prompt)
+   return value
+
+
+################################
+# build_browser_dict() function
+################################
+#
+# Builds a dictionary containing a list of available browsers.
+#
+# The browsers are put into the dictionary in order of preference.
+# X-based browsers like Mozilla and netscape are only available
+# if $DISPLAY is set.
+#
+
+def build_browser_dict():
+
+   dict  = {}
+   count = 0
+
+   if os.getenv("DISPLAY") != None:
+      for browser in X_BROWSERS:
+         path = os.popen("which " + browser).readline()[:-1]
+         if path != "":
+            count += 1
+            dict[count] = path
+   
+   for browser in T_BROWSERS:
+      path = os.popen("which " + browser).readline()[:-1]
+      if path != "":
+         count += 1
+         dict[count] = path
+      
+   return dict
+
+
+###############
+# Main routine
+###############
+#
+# Gets information from the user and calls the viewer
+#
+
+def main():
+
+   #######################
+   # Initialize variables
+   #######################
+
+   status = 0
+   url    = ""
+
+
+   ##################
+   # Check arguments
+   ##################
+
+   if len(sys.argv) < 2:
+      print "Usage: mutturl <url>"
+      return 1
+
+   url = sys.argv[1]
+
+
+   #####################################
+   # Build a list of available browsers
+   #####################################
+
+   dict = build_browser_dict()
+
+
+   #####################################
+   # Get a browser choice from the user
+   #####################################
+
+   print ""
+   print "Choose a browser:"
+   print ""
+
+   keys = dict.keys()
+   keys.sort()
+   for browser in keys:
+      print "   %d. %s" % (browser, os.path.basename(dict[browser]))
+
+   print ""
+
+   input = user_input("Selection [default=1]: ")
+   if input == "":
+      value = 1
+   else:
+      value = string.atoi(input)
+
+
+   ##################################
+   # Use the browser to view the URL
+   ##################################
+
+   try:
+
+      # The ' around the URL is important here, as the urlview manpage
+      # describes:
+      #
+      #   For example,  I could put the following URL in my email 
+      #   messages: 
+      #
+      #        X-Nasty-Url:  http://www.`program_to_execute_as_you`.com  
+      # 
+      #   If you pass  this  URL  to your shell, it could have nasty 
+      #   consequences.
+
+      command = dict[value] + " '" + url + "'"
+      result = os.system(command)
+
+   except:
+
+      # We'll get this error both if the dictionary 
+      # value is bad and if the system call fails.
+
+      print "Error executing browser command."
+   
+
+   #########
+   # Return
+   #########
+
+   return status
+  
+
+#####################
+# Module entry point
+#####################
+#
+# Ensures that the program isn't run if someone
+# just imports this module.
+# 
+
+if __name__ == '__main__':
+   status = main()
+
