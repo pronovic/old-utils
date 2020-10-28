@@ -1,0 +1,223 @@
+#!/bin/ksh
+# vim: set ft=sh:
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+#              C E D A R
+#          S O L U T I O N S       "Software done right."
+#           S O F T W A R E
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Copyright (c) 2011 Kenneth J. Pronovici
+# All rights reserved.
+# 
+# Permission to use, copy, modify, and/or distribute this software 
+# for any purpose with or without fee is hereby granted, provided 
+# that the above copyright notice and this permission notice appear 
+# in all copies.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#
+# Author   : Kenneth J. Pronovici <pronovic@ieee.org>
+# Purpose  : Use SANE for scanning a batch of photographs.
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+########
+# Notes
+########
+
+#
+# Setup notes:
+#
+#  * Implemented an tested on a Debian 'squeeze' system
+#  * You need sane-utils and libtiff-tools installed
+#  * Find your scanner using sane-find-scanner and scanimage -L
+#  * Scanner configuration is in /etc/sane.d/<manufacturer>
+#
+# Hints:
+#
+#  * Make sure your user is in the scanners group
+#  * It may be possible to exclude the --device switch if your default scanner works
+#  * BUT if your scanner gets recognized in more than one way, you must list it explicitly
+#
+# Currently (as of September 2011), the default device seems to work properly,
+# so I don't use a --device switch.  If you need to explicitly identify your
+# scanner, you may need to add this switch.
+# 
+# This implementation assumes that the scanner has a button which can be used to
+# initiate the scan.  This is what allows the entire thing to live in one big loop.
+# If your scanner doesn't have such a button, then this script won't work for you.
+
+if [[ $# = 1 ]]
+then
+   ARCHIVE="$1"
+   PREFIX="img_"
+elif [[ $# = 2 ]]
+then
+   ARCHIVE="$1"
+   PREFIX="$2"
+else
+   print "Usage: batchscan archive-folder] [image-prefix]"
+   print "If you do not provide image-prefix, a default value of 'img_' will be used."
+   exit 1
+fi
+
+if [[ ! -d "${ARCHIVE}" ]]
+then
+   print "Archive folder does not exist: ${ARCHIVE}"
+   exit 2
+fi
+
+print ""
+print "Cedar Solutions Batch Photo Scanner"
+print "==================================="
+print ""
+
+print "*** Using archive folder: ${ARCHIVE}"
+print "*** Using image prefix: ${PREFIX}"
+print ""
+
+print -n "*** Enter collection name: "
+read COLLECTION
+print ""
+
+TARGET="${ARCHIVE}/${COLLECTION}"
+if [[ ! -d "${TARGET}" ]]
+then
+   mkdir -p "${TARGET}"
+fi
+
+METADATA="${TARGET}/metadata"
+
+if [[ -f "${METADATA}" ]]
+then
+   print "*** This collection already exists, so we'll add to it."
+
+   INDEX=$(grep "Current-Index: " "${METADATA}" | sed 's/^Current-Index: //g')
+   echo "${INDEX}" | grep -q '^[0-9][0-9]*'
+   if [[ $? != 0 ]]
+   then
+      print "Unable to read Current-Index; metadata is corrupt: ${METADATA}"
+      exit 3
+   fi
+else
+   INDEX=0
+
+   print -n "*** Enter summary: " 
+   read SUMMARY
+   print ""
+
+   print "*** Enter description (blank to terminate, dot for empty line): "
+   DESCRIPTION=""
+   LINE="X"
+   until [[ "${LINE}" = "" ]]
+   do
+      read LINE
+      if [[ "${LINE}" != "" ]]
+      then
+         if [[ "${DESCRIPTION}" = "" ]]
+         then
+            DESCRIPTION=" ${LINE}"
+         else
+            DESCRIPTION="${DESCRIPTION}\n ${LINE}"
+         fi
+      fi
+   done
+   print ""
+
+   print "Archive: ${ARCHIVE}" > "${METADATA}"
+   print "Image-Prefix: ${PREFIX}" >> "${METADATA}"
+   print "Collection: ${COLLECTION}" >> "${METADATA}"
+   print "Current-Index: ${INDEX}" >> "${METADATA}"
+   print "Description: ${SUMMARY}" >> "${METADATA}"
+   print "${DESCRIPTION}" >> "${METADATA}"
+fi
+
+print ""
+print "*** Please review the following metadata: "
+print ""
+
+cat "${METADATA}"
+print ""
+
+print -n "*** Ok to continue? (Y/n) "
+read ANSWER
+
+if [[ "${ANSWER}" != "" && "${ANSWER}" != "y" && "${ANSWER}" != "Y" ]]
+then
+   print "*** Terminating."
+   exit 0
+fi
+
+BUSY="${TARGET}/.busy"
+
+if [[ -f "${BUSY}" ]]
+then
+   print "*** Error: this target directory is being used by process $(cat ${BUSY})"
+   exit 4
+fi
+
+INTERRUPT=0
+trap INTERRUPT=1 INT
+
+echo "$$" > "${TARGET}/.busy"
+
+while ((!INTERRUPT))
+do
+   OLD=$INDEX
+   INDEX=$((INDEX + 1))
+
+   NAME=$(printf "${PREFIX}%04d" ${INDEX})
+   PPM="${TARGET}/${NAME}.ppm"
+   JPG="${TARGET}/${NAME}.jpg"
+
+   print "\n"
+   print "*** Ready to scan image: ${NAME}"
+   print "*** Press scanner button to start, or CTRL-C to exit."
+   scanimage --wait-for-button --progress --mode color -x 218 -y 280 --resolution 600 > "${PPM}"
+   if [[ $? != 0 ]]
+   then
+      rm -f "${PPM}" "${JPG}"
+      if ((!INTERRUPT)) 
+      then
+         print "Scanning failed.  Exiting."
+         rm -f "${BUSY}"
+         exit 5
+      fi
+   else
+      SIZE=$(ls -s "${PPM}" | awk '{print $1}')
+      if [[ $SIZE -gt 0 ]]
+      then
+         print -n "*** Cropping and converting image..."
+
+         # This trims the whitespace off from around the picture.
+         # See http://www.imagemagick.org/Usage/crop/#chop
+         # If you are getting some left over, you can try increasing -fuzz
+         convert "${PPM}" \
+                 -crop $(convert "${PPM}" -virtual-pixel edge -blur 0x15 -fuzz 40% -trim -format '%wx%h%O' info:) \
+                 +repage "${JPG}"
+         if [[ $? -eq 0 ]]
+         then
+            if [[ -f "${JPG}" ]]
+            then
+               rm "${PPM}"
+               sed -i -e "s/^Current-Index: ${OLD}/Current-Index: ${INDEX}/" "${METADATA}"
+            fi
+         fi
+
+         print "done."
+      else
+         rm -f "${PPM}"
+         # but don't reset the current index, since this scan wasn't successful
+      fi
+   fi
+done
+
+rm -f "${BUSY}"
+print ""
+print "*** Finished scanning collection ${COLLECTION}."

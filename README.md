@@ -10,6 +10,8 @@ See also: the [vim-syntax](https://github.com/pronovic/vim-syntax) repository, w
 
 ## Available Utilities
 
+**batchscan**: Shell script to use SANE for scanning a batch of photographs. You need sane-utils and libtiff-tools installed.
+
 **change-string**: Searches through a list of documents for a strings matching a Perl regular expression, and replaces the matching strings with a constant pattern. Useful when (for example) changing the copyright or author in all files in a given directory. Written in Perl 5.
 
 **c-stats**: Acts on C or C++ source files and returns metrics related to the files. Returned metrics include overall lines, actual LOC (lines of code), number of comment-only lines and number of non-comment whitespace lines. Written in Perl 5.
